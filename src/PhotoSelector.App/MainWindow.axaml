@@ -8,7 +8,7 @@
         d:DesignHeight="760"
         Width="1200"
         Height="760"
-        MinWidth="980"
+        MinWidth="1200"
         MinHeight="640"
         x:Class="PhotoSelector.App.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -168,7 +168,7 @@
                     Background="#FBFCFB"
                     BorderBrush="#D8DED9"
                     BorderThickness="0,0,0,1">
-                <Grid Margin="14,7" ColumnDefinitions="220,190,*,Auto" ColumnSpacing="10">
+                <Grid Margin="14,7" ColumnDefinitions="160,165,*,Auto" ColumnSpacing="10">
                     <TextBox Grid.Column="0" PlaceholderText="Search by file name" />
                     <ComboBox Grid.Column="1" SelectedIndex="0">
                         <ComboBoxItem>Sort by AI score</ComboBoxItem>
@@ -179,6 +179,8 @@
                                Text="Shortcuts: K keep - M maybe - R reject - 1-5 stars"
                                Classes="muted"
                                FontSize="12"
+                               Width="155"
+                               TextTrimming="CharacterEllipsis"
                                VerticalAlignment="Center" />
                 </Grid>
             </Border>
@@ -250,9 +252,9 @@
                     <TextBlock Text="{Binding SelectedPhoto.Name}" FontSize="19" FontWeight="Bold" />
                     <Grid ColumnDefinitions="86,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
                         <TextBlock Grid.Row="0" Text="JPG" Classes="muted" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedPhoto.JpgFileName}" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedPhoto.JpgFileLabel}" />
                         <TextBlock Grid.Row="1" Text="RAW" Classes="muted" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedPhoto.RawFileName}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedPhoto.RawFileLabel}" />
                         <TextBlock Grid.Row="2" Text="AI score" Classes="muted" />
                         <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedPhoto.AiScoreSummary}" />
                         <TextBlock Grid.Row="3" Text="User mark" Classes="muted" />
