@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using PhotoSelector.Core.Scanning;
 using PhotoSelector.Core.Storage;
 
@@ -42,6 +43,50 @@ public sealed class ProjectDatabaseTests
         Assert.NotNull(photos[0].JpegPath);
         Assert.NotNull(photos[0].RawPath);
         Assert.DoesNotContain(photos, photo => photo.BaseName == "IMG_0002");
+    }
+
+    [Fact]
+    public void ReplacePhotos_fails_for_missing_project()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+
+        Assert.Throws<SqliteException>(() =>
+            database.ReplacePhotos(
+                999,
+                new[]
+                {
+                    new PhotoPair("IMG_0001", "IMG_0001.JPG", "IMG_0001.CR3"),
+                }));
+    }
+
+    [Fact]
+    public void Migrate_keeps_one_schema_version_row()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+
+        using (var database = ProjectDatabase.Open(databasePath))
+        {
+            database.Migrate();
+            database.Migrate();
+        }
+
+        using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*), MIN(id), MAX(id), MIN(version), MAX(version) FROM schema_version;";
+
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
+        Assert.Equal(1, reader.GetInt64(2));
+        Assert.Equal(1, reader.GetInt64(3));
+        Assert.Equal(1, reader.GetInt64(4));
     }
 
     private sealed class TempDirectory : IDisposable

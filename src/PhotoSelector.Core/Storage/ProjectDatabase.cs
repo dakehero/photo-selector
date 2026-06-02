@@ -24,6 +24,7 @@ public sealed class ProjectDatabase : IDisposable
         var builder = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
+            ForeignKeys = true,
             Pooling = false,
         };
 
@@ -37,12 +38,13 @@ public sealed class ProjectDatabase : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
                 version INTEGER NOT NULL
             );
 
-            INSERT INTO schema_version (version)
-            SELECT 1
-            WHERE NOT EXISTS (SELECT 1 FROM schema_version);
+            INSERT INTO schema_version (id, version)
+            VALUES (1, 1)
+            ON CONFLICT(id) DO NOTHING;
 
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
