@@ -1,12 +1,23 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Avalonia.Media;
+using PhotoSelector.Core.Scanning;
+using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.App.ViewModels;
 
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
+    private string aiStatus = "AI queue: 128 / 192";
+    private int totalPhotos = 192;
+    private int pairedPhotos = 171;
+    private int jpgOnlyPhotos = 16;
+    private int rawOnlyPhotos = 5;
+    private string projectDirectory = @"D:\Photos\2026-Trip\Day-01";
     private PhotoItemViewModel? selectedPhoto;
 
     public MainWindowViewModel()
@@ -41,19 +52,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public string ProjectDirectory { get; } = @"D:\Photos\2026-Trip\Day-01";
+    public string ProjectDirectory
+    {
+        get => projectDirectory;
+        private set => SetProperty(ref projectDirectory, value);
+    }
 
-    public string AiStatus { get; } = "AI queue: 128 / 192";
+    public string AiStatus
+    {
+        get => aiStatus;
+        private set => SetProperty(ref aiStatus, value);
+    }
 
     public string AiProvider { get; } = "OpenAI-compatible - gpt-4.1-mini";
 
-    public int TotalPhotos { get; } = 192;
+    public int TotalPhotos
+    {
+        get => totalPhotos;
+        private set => SetProperty(ref totalPhotos, value);
+    }
 
-    public int PairedPhotos { get; } = 171;
+    public int PairedPhotos
+    {
+        get => pairedPhotos;
+        private set => SetProperty(ref pairedPhotos, value);
+    }
 
-    public int JpgOnlyPhotos { get; } = 16;
+    public int JpgOnlyPhotos
+    {
+        get => jpgOnlyPhotos;
+        private set => SetProperty(ref jpgOnlyPhotos, value);
+    }
 
-    public int RawOnlyPhotos { get; } = 5;
+    public int RawOnlyPhotos
+    {
+        get => rawOnlyPhotos;
+        private set => SetProperty(ref rawOnlyPhotos, value);
+    }
 
     public int AiProgressPercent { get; } = 67;
 
@@ -74,6 +109,93 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             selectedPhoto = value;
             OnPropertyChanged();
         }
+    }
+
+    public void LoadDirectory(string directory)
+    {
+        var pairs = PhotoScanner.ScanDirectory(directory);
+        PersistProject(directory, pairs);
+        LoadScannedPairs(directory, pairs);
+    }
+
+    private void LoadScannedPairs(string directory, IReadOnlyList<PhotoPair> pairs)
+    {
+        ProjectDirectory = directory;
+        TotalPhotos = pairs.Count;
+        PairedPhotos = pairs.Count(pair => pair.JpegPath is not null && pair.RawPath is not null);
+        JpgOnlyPhotos = pairs.Count(pair => pair.JpegPath is not null && pair.RawPath is null);
+        RawOnlyPhotos = pairs.Count(pair => pair.JpegPath is null && pair.RawPath is not null);
+        AiStatus = $"AI queue: 0 / {TotalPhotos}";
+
+        Filters.Clear();
+        Filters.Add(new("All", TotalPhotos, true));
+        Filters.Add(new("AI: Keep", 0));
+        Filters.Add(new("AI: Maybe", 0));
+        Filters.Add(new("AI: Reject", 0));
+        Filters.Add(new("Unreviewed", TotalPhotos));
+
+        Photos.Clear();
+        for (var index = 0; index < pairs.Count; index++)
+        {
+            Photos.Add(CreatePhotoItem(pairs[index], index));
+        }
+
+        SelectedPhoto = Photos.Count > 0 ? Photos[0] : null;
+    }
+
+    private static void PersistProject(string directory, IReadOnlyList<PhotoPair> pairs)
+    {
+        var databasePath = Path.Combine(directory, ".photo-selector", "photo-selector.db");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(directory);
+        database.ReplacePhotos(projectId, pairs);
+    }
+
+    private static PhotoItemViewModel CreatePhotoItem(PhotoPair pair, int index)
+    {
+        return new PhotoItemViewModel(
+            pair.BaseName,
+            "unreviewed",
+            0,
+            Path.GetFileName(pair.JpegPath),
+            Path.GetFileName(pair.RawPath),
+            GetPairStatus(pair),
+            PickTone(index),
+            "Not scored yet.");
+    }
+
+    private static string GetPairStatus(PhotoPair pair)
+    {
+        return (pair.JpegPath, pair.RawPath) switch
+        {
+            (not null, not null) => "JPG+RAW",
+            (not null, null) => "JPG only",
+            (null, not null) => "RAW only",
+            _ => "Unsupported",
+        };
+    }
+
+    private static string PickTone(int index)
+    {
+        string[] tones = ["6d927d", "a48569", "777f8c", "5b8796", "b09574", "729066"];
+        return tones[index % tones.Length];
+    }
+
+    private bool SetProperty<T>(
+        ref T field,
+        T value,
+        [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return false;
+        }
+
+        field = value;
+        OnPropertyChanged(propertyName);
+        return true;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

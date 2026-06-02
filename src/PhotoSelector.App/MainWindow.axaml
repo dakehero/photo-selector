@@ -73,8 +73,8 @@
                            FontSize="17"
                            VerticalAlignment="Center"
                            Margin="0,0,10,0" />
-                <Button Grid.Column="1" Classes="tool" Content="Open directory" />
-                <Button Grid.Column="2" Classes="tool" Content="Scan" />
+                <Button Grid.Column="1" Classes="tool" Content="Open directory" Click="OpenDirectoryButton_Click" />
+                <Button Grid.Column="2" Classes="tool" Content="Scan" Click="ScanButton_Click" />
                 <Button Grid.Column="3" Classes="tool primary" Content="AI scoring" />
                 <Button Grid.Column="4" Classes="tool" Content="Export selected" />
                 <Border Grid.Column="6"
