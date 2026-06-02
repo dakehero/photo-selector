@@ -89,6 +89,46 @@ public sealed class ProjectDatabaseTests
         Assert.Equal(1, reader.GetInt64(4));
     }
 
+    [Fact]
+    public void Migrate_normalizes_legacy_schema_version_table()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE schema_version (
+                    version INTEGER NOT NULL
+                );
+
+                INSERT INTO schema_version (version)
+                VALUES (1);
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using (var database = ProjectDatabase.Open(databasePath))
+        {
+            database.Migrate();
+        }
+
+        using var migratedConnection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
+        migratedConnection.Open();
+        using var migratedCommand = migratedConnection.CreateCommand();
+        migratedCommand.CommandText = "SELECT COUNT(*), MIN(id), MAX(id), MIN(version), MAX(version) FROM schema_version;";
+
+        using var reader = migratedCommand.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
+        Assert.Equal(1, reader.GetInt64(2));
+        Assert.Equal(1, reader.GetInt64(3));
+        Assert.Equal(1, reader.GetInt64(4));
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

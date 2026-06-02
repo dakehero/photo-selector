@@ -35,6 +35,8 @@ public sealed class ProjectDatabase : IDisposable
 
     public void Migrate()
     {
+        NormalizeSchemaVersionTable();
+
         using var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS schema_version (
@@ -65,6 +67,32 @@ public sealed class ProjectDatabase : IDisposable
             );
             """;
         command.ExecuteNonQuery();
+    }
+
+    private void NormalizeSchemaVersionTable()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM pragma_table_info('schema_version')
+            WHERE name = 'id';
+            """;
+
+        if ((long)command.ExecuteScalar()! > 0)
+        {
+            return;
+        }
+
+        using var rebuildCommand = connection.CreateCommand();
+        rebuildCommand.CommandText = """
+            DROP TABLE IF EXISTS schema_version;
+
+            CREATE TABLE schema_version (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                version INTEGER NOT NULL
+            );
+            """;
+        rebuildCommand.ExecuteNonQuery();
     }
 
     public long CreateProject(string sourceDirectory)
