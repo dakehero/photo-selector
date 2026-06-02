@@ -45,4 +45,20 @@ public sealed class PhotoScannerTests
                 Assert.Null(pair.RawPath);
             });
     }
+
+    [Fact]
+    public void ScanFiles_pairs_jpeg_and_raw_files_with_differently_cased_stems()
+    {
+        var files = new[]
+        {
+            Path.Combine("shoot", "IMG_0001.JPG"),
+            Path.Combine("shoot", "img_0001.CR3"),
+        };
+
+        var pair = Assert.Single(PhotoScanner.ScanFiles(files));
+
+        Assert.Equal("IMG_0001", pair.BaseName);
+        Assert.Equal(Path.Combine("shoot", "IMG_0001.JPG"), pair.JpegPath);
+        Assert.Equal(Path.Combine("shoot", "img_0001.CR3"), pair.RawPath);
+    }
 }

@@ -6,7 +6,7 @@ public static class PhotoScanner
 {
     public static IReadOnlyList<PhotoPair> ScanFiles(IEnumerable<string> files)
     {
-        var byBaseName = new Dictionary<string, (string? JpegPath, string? RawPath)>(StringComparer.Ordinal);
+        var byBaseName = new Dictionary<string, (string? JpegPath, string? RawPath)>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var file in files)
         {
@@ -27,7 +27,7 @@ public static class PhotoScanner
         }
 
         return byBaseName
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => new PhotoPair(pair.Key, pair.Value.JpegPath, pair.Value.RawPath))
             .ToList();
     }
