@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photo Selector Workbench Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f3;
+      --panel: #ffffff;
+      --panel-2: #eef1ed;
+      --ink: #1f2523;
+      --muted: #66716d;
+      --line: #d8ded9;
+      --accent: #2f7c6f;
+      --accent-2: #8b5b3e;
+      --keep: #197a52;
+      --maybe: #9b6a18;
+      --reject: #9d3636;
+      --shadow: 0 14px 36px rgba(23, 30, 28, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 248px minmax(420px, 1fr) 320px;
+      grid-template-rows: 56px 1fr;
+      height: 100vh;
+    }
+
+    .toolbar {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: #fbfcfb;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .title {
+      font-weight: 650;
+      margin-right: 10px;
+      min-width: 156px;
+    }
+
+    .tool {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      height: 36px;
+      min-width: 36px;
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .tool.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .tool:active {
+      transform: translateY(1px);
+    }
+
+    .spacer { flex: 1; }
+
+    .status-pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: var(--muted);
+      background: #fff;
+      white-space: nowrap;
+    }
+
+    .sidebar, .details {
+      background: var(--panel);
+      overflow: auto;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 16px;
+    }
+
+    .details {
+      border-left: 1px solid var(--line);
+      padding: 16px;
+    }
+
+    .section {
+      margin-bottom: 18px;
+    }
+
+    .section h2 {
+      font-size: 13px;
+      margin: 0 0 9px;
+      color: var(--muted);
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+
+    .path {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      color: #34413d;
+      word-break: break-all;
+      line-height: 1.35;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .metric {
+      background: #f8faf8;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .filter {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .filter.active {
+      background: #e2ece8;
+      color: #175e53;
+      font-weight: 650;
+    }
+
+    .count {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: 46px 1fr;
+      overflow: hidden;
+    }
+
+    .grid-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfb;
+    }
+
+    .grid-head input {
+      width: 220px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      height: 32px;
+      padding: 0 10px;
+      background: #fff;
+    }
+
+    .grid {
+      padding: 14px;
+      overflow: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      grid-auto-rows: 174px;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .photo {
+      border: 2px solid transparent;
+      border-radius: 7px;
+      background: #fff;
+      overflow: hidden;
+      box-shadow: 0 1px 0 rgba(0,0,0,.04);
+      cursor: pointer;
+      position: relative;
+    }
+
+    .photo.selected {
+      border-color: var(--accent);
+      box-shadow: var(--shadow);
+    }
+
+    .thumb {
+      height: 118px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.3), rgba(0,0,0,.08)),
+        var(--tone);
+      position: relative;
+    }
+
+    .thumb::after {
+      content: "";
+      position: absolute;
+      inset: 16px 22px 20px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.38);
+      filter: blur(1px);
+    }
+
+    .photo-meta {
+      padding: 7px 8px;
+      display: grid;
+      gap: 3px;
+      font-size: 12px;
+    }
+
+    .name {
+      font-weight: 650;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .badges {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      min-height: 18px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 2px 6px;
+      color: #fff;
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .badge.keep { background: var(--keep); }
+    .badge.maybe { background: var(--maybe); }
+    .badge.reject { background: var(--reject); }
+    .badge.raw { background: #485550; }
+    .badge.fail { background: #6c5960; }
+
+    .pair {
+      color: var(--muted);
+    }
+
+    .preview {
+      height: 188px;
+      border-radius: 7px;
+      background:
+        radial-gradient(circle at 70% 30%, rgba(255,255,255,.45), transparent 24%),
+        linear-gradient(135deg, rgba(255,255,255,.15), rgba(0,0,0,.12)),
+        var(--preview-tone);
+      border: 1px solid var(--line);
+      margin-bottom: 13px;
+    }
+
+    .detail-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 5px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 82px 1fr;
+      gap: 8px;
+      font-size: 13px;
+      padding: 6px 0;
+      border-bottom: 1px solid #edf0ed;
+    }
+
+    .kv span:first-child {
+      color: var(--muted);
+    }
+
+    .decision-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .decision {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      height: 34px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .decision.active.keep { border-color: var(--keep); color: var(--keep); font-weight: 700; }
+    .decision.active.maybe { border-color: var(--maybe); color: var(--maybe); font-weight: 700; }
+    .decision.active.reject { border-color: var(--reject); color: var(--reject); font-weight: 700; }
+
+    .stars {
+      display: flex;
+      gap: 5px;
+      margin-top: 10px;
+    }
+
+    .star {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      color: #8b6b24;
+    }
+
+    .star.on {
+      background: #fff4c7;
+      border-color: #d5b758;
+    }
+
+    .ai-box {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fafbfa;
+      padding: 10px;
+      line-height: 1.4;
+      color: #33403c;
+      font-size: 13px;
+    }
+
+    .progress {
+      height: 8px;
+      background: #e4e8e5;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress div {
+      height: 100%;
+      width: 67%;
+      background: var(--accent);
+    }
+
+    .note {
+      width: 100%;
+      min-height: 72px;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px;
+      color: var(--ink);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar">
+      <div class="title">Photo Selector</div>
+      <button class="tool">打开目录</button>
+      <button class="tool">扫描</button>
+      <button class="tool primary" id="rateBtn">AI 评分</button>
+      <button class="tool">导出入选</button>
+      <div class="spacer"></div>
+      <div class="status-pill" id="rateStatus">AI 队列：128 / 192</div>
+      <button class="tool">设置</button>
+    </header>
+
+    <aside class="sidebar">
+      <section class="section">
+        <h2>项目目录</h2>
+        <div class="path">D:\Photos\2026-Trip\Day-01</div>
+      </section>
+
+      <section class="section">
+        <h2>扫描摘要</h2>
+        <div class="metric-grid">
+          <div class="metric"><strong>192</strong><span>照片项</span></div>
+          <div class="metric"><strong>171</strong><span>JPG+RAW</span></div>
+          <div class="metric"><strong>16</strong><span>仅 JPG</span></div>
+          <div class="metric"><strong>5</strong><span>仅 RAW</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>筛选</h2>
+        <div class="filter active" data-filter="all"><span>全部</span><span class="count">192</span></div>
+        <div class="filter" data-filter="keep"><span>AI: Keep</span><span class="count">42</span></div>
+        <div class="filter" data-filter="maybe"><span>AI: Maybe</span><span class="count">81</span></div>
+        <div class="filter" data-filter="reject"><span>AI: Reject</span><span class="count">69</span></div>
+        <div class="filter" data-filter="unreviewed"><span>未人工确认</span><span class="count">118</span></div>
+      </section>
+
+      <section class="section">
+        <h2>AI 评分进度</h2>
+        <div class="count">OpenAI-compatible · gpt-4.1-mini</div>
+        <div class="progress"><div id="progress"></div></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="grid-head">
+        <input placeholder="按文件名搜索">
+        <select>
+          <option>按 AI 分数排序</option>
+          <option>按拍摄时间排序</option>
+          <option>按人工标记排序</option>
+        </select>
+        <div class="spacer"></div>
+        <span class="count">快捷键：K 保留 · M 待定 · R 拒绝 · 1-5 星级</span>
+      </div>
+      <div class="grid" id="grid"></div>
+    </main>
+
+    <aside class="details">
+      <div class="preview" id="preview"></div>
+      <div class="detail-title" id="detailName">IMG_0241</div>
+      <div class="kv"><span>JPG</span><span id="jpgPath">IMG_0241.JPG</span></div>
+      <div class="kv"><span>RAW</span><span id="rawPath">IMG_0241.CR3</span></div>
+      <div class="kv"><span>AI 分数</span><span id="aiScore">4 / 5 · keep</span></div>
+      <div class="kv"><span>人工标记</span><span id="userMark">未确认</span></div>
+
+      <section class="section" style="margin-top:16px">
+        <h2>人工确认</h2>
+        <div class="decision-row">
+          <button class="decision keep" data-decision="keep">Keep</button>
+          <button class="decision maybe" data-decision="maybe">Maybe</button>
+          <button class="decision reject" data-decision="reject">Reject</button>
+        </div>
+        <div class="stars" id="stars"></div>
+      </section>
+
+      <section class="section">
+        <h2>AI 理由</h2>
+        <div class="ai-box" id="reason">主体清晰，构图干净，表情自然。建议保留并导出 JPG+RAW 对。</div>
+      </section>
+
+      <section class="section">
+        <h2>备注</h2>
+        <textarea class="note" placeholder="给这张照片留一点人工备注"></textarea>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const photos = [
+      ["IMG_0241", "keep", 4, true, "#6d927d", "主体清晰，构图干净，表情自然。建议保留并导出 JPG+RAW 对。"],
+      ["IMG_0242", "maybe", 3, true, "#a48569", "光线不错，但主体边缘略软。建议人工复核。"],
+      ["IMG_0243", "reject", 2, true, "#777f8c", "曝光偏暗且表情不佳，可拒绝。"],
+      ["IMG_0244", "keep", 5, true, "#5b8796", "最佳候选，表情和动作都很稳定。"],
+      ["IMG_0245", "maybe", 3, false, "#b09574", "只有 JPG，适合保留预览但导出时不会有 RAW。"],
+      ["IMG_0246", "reject", 1, true, "#8b7774", "明显失焦。"],
+      ["IMG_0247", "keep", 4, true, "#729066", "色彩和层次好，可以进入精选。"],
+      ["IMG_0248", "maybe", 3, true, "#8d718f", "构图可用，但背景略杂。"],
+      ["IMG_0249", "reject", 2, false, "#686f64", "只有 RAW 且没有可用预览。"],
+      ["IMG_0250", "keep", 4, true, "#9a7d5c", "细节清楚，适合保留。"],
+      ["IMG_0251", "maybe", 3, true, "#5f7c89", "需要和相邻照片比较。"],
+      ["IMG_0252", "reject", 2, true, "#83796f", "重复照片，质量较弱。"]
+    ];
+
+    const state = { selected: 0, decision: {}, stars: {} };
+    const grid = document.querySelector("#grid");
+    const stars = document.querySelector("#stars");
+
+    function badgeClass(category) {
+      return category === "keep" ? "keep" : category === "maybe" ? "maybe" : "reject";
+    }
+
+    function renderGrid() {
+      grid.innerHTML = photos.map((p, i) => {
+        const [name, category, score, paired, tone] = p;
+        const mark = state.decision[name];
+        return `
+          <div class="photo ${i === state.selected ? "selected" : ""}" data-index="${i}" style="--tone:${tone}">
+            <div class="thumb"></div>
+            <div class="photo-meta">
+              <div class="name">${name}</div>
+              <div class="badges">
+                <span class="badge ${badgeClass(category)}">${category} · ${score}</span>
+                <span class="badge raw">${paired ? "JPG+RAW" : "单文件"}</span>
+                ${mark ? `<span class="badge ${badgeClass(mark)}">user ${mark}</span>` : ""}
+              </div>
+              <div class="pair">${paired ? `${name}.JPG + ${name}.CR3` : `${name}.JPG`}</div>
+            </div>
+          </div>`;
+      }).join("");
+
+      document.querySelectorAll(".photo").forEach(card => {
+        card.addEventListener("click", () => {
+          state.selected = Number(card.dataset.index);
+          render();
+        });
+      });
+    }
+
+    function renderStars(name) {
+      const current = state.stars[name] ?? photos[state.selected][2];
+      stars.innerHTML = "";
+      for (let i = 1; i <= 5; i++) {
+        const button = document.createElement("button");
+        button.className = "star" + (i <= current ? " on" : "");
+        button.textContent = "★";
+        button.addEventListener("click", () => {
+          state.stars[name] = i;
+          render();
+        });
+        stars.appendChild(button);
+      }
+    }
+
+    function renderDetails() {
+      const [name, category, score, paired, tone, reason] = photos[state.selected];
+      document.querySelector("#preview").style.setProperty("--preview-tone", tone);
+      document.querySelector("#detailName").textContent = name;
+      document.querySelector("#jpgPath").textContent = `${name}.JPG`;
+      document.querySelector("#rawPath").textContent = paired ? `${name}.CR3` : "未找到匹配 RAW";
+      document.querySelector("#aiScore").textContent = `${score} / 5 · ${category}`;
+      document.querySelector("#userMark").textContent = state.decision[name] ?? "未确认";
+      document.querySelector("#reason").textContent = reason;
+      document.querySelectorAll(".decision").forEach(button => {
+        button.classList.toggle("active", state.decision[name] === button.dataset.decision);
+      });
+      renderStars(name);
+    }
+
+    function render() {
+      renderGrid();
+      renderDetails();
+    }
+
+    document.querySelectorAll(".filter").forEach(filter => {
+      filter.addEventListener("click", () => {
+        document.querySelectorAll(".filter").forEach(item => item.classList.remove("active"));
+        filter.classList.add("active");
+      });
+    });
+
+    document.querySelectorAll(".decision").forEach(button => {
+      button.addEventListener("click", () => {
+        const name = photos[state.selected][0];
+        state.decision[name] = button.dataset.decision;
+        render();
+      });
+    });
+
+    document.querySelector("#rateBtn").addEventListener("click", () => {
+      document.querySelector("#rateStatus").textContent = "AI 队列：模拟评分中...";
+      document.querySelector("#progress").style.width = "84%";
+      setTimeout(() => {
+        document.querySelector("#rateStatus").textContent = "AI 队列：161 / 192";
+      }, 600);
+    });
+
+    window.addEventListener("keydown", event => {
+      const name = photos[state.selected][0];
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        state.selected = Math.min(photos.length - 1, state.selected + 1);
+        render();
+      }
+      if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        state.selected = Math.max(0, state.selected - 1);
+        render();
+      }
+      if (["k", "m", "r"].includes(event.key.toLowerCase())) {
+        state.decision[name] = { k: "keep", m: "maybe", r: "reject" }[event.key.toLowerCase()];
+        render();
+      }
+      if (/^[1-5]$/.test(event.key)) {
+        state.stars[name] = Number(event.key);
+        render();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>
