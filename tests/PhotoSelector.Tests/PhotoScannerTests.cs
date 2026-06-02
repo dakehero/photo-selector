@@ -79,4 +79,25 @@ public sealed class PhotoScannerTests
         Assert.Equal(Path.Combine("shoot", "IMG_0001.jpeg"), pair.JpegPath);
         Assert.Equal(Path.Combine("shoot", "IMG_0001.ARW"), pair.RawPath);
     }
+
+    [Fact]
+    public void ScanFiles_uses_total_order_for_case_only_duplicate_paths()
+    {
+        var lowerFirst = new[]
+        {
+            Path.Combine("shoot", "img_0001.jpg"),
+            Path.Combine("shoot", "IMG_0001.JPG"),
+        };
+        var upperFirst = new[]
+        {
+            Path.Combine("shoot", "IMG_0001.JPG"),
+            Path.Combine("shoot", "img_0001.jpg"),
+        };
+
+        var lowerFirstPair = Assert.Single(PhotoScanner.ScanFiles(lowerFirst));
+        var upperFirstPair = Assert.Single(PhotoScanner.ScanFiles(upperFirst));
+
+        Assert.Equal(Path.Combine("shoot", "IMG_0001.JPG"), lowerFirstPair.JpegPath);
+        Assert.Equal(Path.Combine("shoot", "IMG_0001.JPG"), upperFirstPair.JpegPath);
+    }
 }

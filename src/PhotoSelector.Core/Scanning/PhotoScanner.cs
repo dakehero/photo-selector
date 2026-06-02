@@ -8,7 +8,9 @@ public static class PhotoScanner
     {
         var byBaseName = new Dictionary<string, (string? JpegPath, string? RawPath)>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in files.OrderBy(file => file, StringComparer.OrdinalIgnoreCase))
+        foreach (var file in files
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(file => file, StringComparer.Ordinal))
         {
             var kind = PhotoFileClassifier.Classify(file);
             if (kind == PhotoFileKind.Unsupported)
