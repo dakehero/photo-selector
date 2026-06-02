@@ -60,6 +60,47 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(3, database.ListPhotos(project.Id).Count);
     }
 
+    [Fact]
+    public void LoadDirectory_reuses_existing_project_and_replaces_photos()
+    {
+        using var tempDirectory = new TempDirectory();
+        File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.JPG"), "");
+        File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.CR3"), "");
+
+        var viewModel = new MainWindowViewModel();
+        viewModel.LoadDirectory(tempDirectory.Path);
+
+        File.Delete(Path.Combine(tempDirectory.Path, "IMG_0001.CR3"));
+        File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0002.NEF"), "");
+
+        viewModel.LoadDirectory(Path.Combine(tempDirectory.Path, "."));
+
+        var databasePath = Path.Combine(tempDirectory.Path, ".photo-selector", "photo-selector.db");
+        using var database = ProjectDatabase.Open(databasePath);
+        var project = Assert.Single(database.ListProjects());
+        var photos = database.ListPhotos(project.Id);
+
+        Assert.Equal(Path.GetFullPath(tempDirectory.Path), project.SourceDirectory);
+        Assert.Equal(2, photos.Count);
+        Assert.DoesNotContain(photos, photo => photo.RawPath?.EndsWith("IMG_0001.CR3") == true);
+        Assert.Contains(photos, photo => photo.BaseName == "IMG_0002" && photo.RawPath is not null);
+    }
+
+    [Fact]
+    public async Task LoadDirectoryAsync_reports_errors_without_replacing_sample_rows()
+    {
+        var missingDirectory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        var viewModel = new MainWindowViewModel();
+        var originalPhotoCount = viewModel.Photos.Count;
+
+        await viewModel.LoadDirectoryAsync(missingDirectory);
+
+        Assert.False(viewModel.IsScanning);
+        Assert.Contains("Scan failed", viewModel.StatusMessage);
+        Assert.Equal(originalPhotoCount, viewModel.Photos.Count);
+        Assert.NotEqual(missingDirectory, viewModel.ProjectDirectory);
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

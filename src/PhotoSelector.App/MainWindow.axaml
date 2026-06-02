@@ -77,6 +77,11 @@
                 <Button Grid.Column="2" Classes="tool" Content="Scan" Click="ScanButton_Click" />
                 <Button Grid.Column="3" Classes="tool primary" Content="AI scoring" />
                 <Button Grid.Column="4" Classes="tool" Content="Export selected" />
+                <TextBlock Grid.Column="5"
+                           Text="{Binding StatusMessage}"
+                           Classes="muted"
+                           TextTrimming="CharacterEllipsis"
+                           VerticalAlignment="Center" />
                 <Border Grid.Column="6"
                         Classes="panel"
                         CornerRadius="999"

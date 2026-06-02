@@ -1,9 +1,11 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Avalonia.Media;
 using PhotoSelector.Core.Scanning;
 using PhotoSelector.Core.Storage;
@@ -18,6 +20,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private int jpgOnlyPhotos = 16;
     private int rawOnlyPhotos = 5;
     private string projectDirectory = @"D:\Photos\2026-Trip\Day-01";
+    private bool isScanning;
+    private string statusMessage = "Sample project loaded.";
     private PhotoItemViewModel? selectedPhoto;
 
     public MainWindowViewModel()
@@ -92,6 +96,18 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public int AiProgressPercent { get; } = 67;
 
+    public bool IsScanning
+    {
+        get => isScanning;
+        private set => SetProperty(ref isScanning, value);
+    }
+
+    public string StatusMessage
+    {
+        get => statusMessage;
+        private set => SetProperty(ref statusMessage, value);
+    }
+
     public ObservableCollection<FilterItemViewModel> Filters { get; }
 
     public ObservableCollection<PhotoItemViewModel> Photos { get; }
@@ -113,9 +129,43 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void LoadDirectory(string directory)
     {
-        var pairs = PhotoScanner.ScanDirectory(directory);
-        PersistProject(directory, pairs);
-        LoadScannedPairs(directory, pairs);
+        var result = ScanAndPersist(directory);
+        LoadScannedPairs(result.SourceDirectory, result.Pairs);
+        StatusMessage = $"Scanned {result.Pairs.Count} photo item(s).";
+    }
+
+    public async Task LoadDirectoryAsync(string directory)
+    {
+        IsScanning = true;
+        StatusMessage = $"Scanning {directory}...";
+
+        try
+        {
+            var result = await Task.Run(() => ScanAndPersist(directory));
+            LoadScannedPairs(result.SourceDirectory, result.Pairs);
+            StatusMessage = $"Scanned {result.Pairs.Count} photo item(s).";
+        }
+        catch (IOException ex)
+        {
+            StatusMessage = $"Scan failed: {ex.Message}";
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            StatusMessage = $"Scan failed: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Scan failed: {ex.Message}";
+        }
+        finally
+        {
+            IsScanning = false;
+        }
+    }
+
+    public void ReportDirectorySelectionFailed(string? message = null)
+    {
+        StatusMessage = message ?? "Could not open the selected directory.";
     }
 
     private void LoadScannedPairs(string directory, IReadOnlyList<PhotoPair> pairs)
@@ -143,14 +193,22 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         SelectedPhoto = Photos.Count > 0 ? Photos[0] : null;
     }
 
-    private static void PersistProject(string directory, IReadOnlyList<PhotoPair> pairs)
+    private static ScanResult ScanAndPersist(string directory)
     {
-        var databasePath = Path.Combine(directory, ".photo-selector", "photo-selector.db");
+        var sourceDirectory = Path.GetFullPath(directory);
+        var pairs = PhotoScanner.ScanDirectory(sourceDirectory);
+        var databasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
 
         using var database = ProjectDatabase.Open(databasePath);
         database.Migrate();
-        var projectId = database.CreateProject(directory);
+        var existingProject = database
+            .ListProjects()
+            .FirstOrDefault(project =>
+                string.Equals(project.SourceDirectory, sourceDirectory, StringComparison.OrdinalIgnoreCase));
+        var projectId = existingProject?.Id ?? database.CreateProject(sourceDirectory);
         database.ReplacePhotos(projectId, pairs);
+
+        return new ScanResult(sourceDirectory, pairs);
     }
 
     private static PhotoItemViewModel CreatePhotoItem(PhotoPair pair, int index)
@@ -202,6 +260,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
+
+    private sealed record ScanResult(string SourceDirectory, IReadOnlyList<PhotoPair> Pairs);
 }
 
 public sealed record FilterItemViewModel(string Name, int Count, bool IsActive = false)

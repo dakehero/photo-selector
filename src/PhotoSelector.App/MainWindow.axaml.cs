@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Avalonia.Controls;
@@ -16,25 +18,43 @@ public partial class MainWindow : Window
 
     private async void OpenDirectoryButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (DataContext is not MainWindowViewModel viewModel || !StorageProvider.CanOpen)
+        if (DataContext is not MainWindowViewModel viewModel)
         {
             return;
         }
 
-        var directories = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        if (!StorageProvider.CanOpen)
         {
-            Title = "Open photo directory",
-            AllowMultiple = false,
-        });
+            viewModel.ReportDirectorySelectionFailed();
+            return;
+        }
+
+        IReadOnlyList<IStorageFolder> directories;
+        try
+        {
+            directories = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Open photo directory",
+                AllowMultiple = false,
+            });
+        }
+        catch (Exception ex)
+        {
+            viewModel.ReportDirectorySelectionFailed($"Could not open the selected directory: {ex.Message}");
+            return;
+        }
 
         var directory = directories.FirstOrDefault()?.TryGetLocalPath();
         if (!string.IsNullOrWhiteSpace(directory))
         {
-            viewModel.LoadDirectory(directory);
+            await viewModel.LoadDirectoryAsync(directory);
+            return;
         }
+
+        viewModel.ReportDirectorySelectionFailed("The selected directory is not available on the local filesystem.");
     }
 
-    private void ScanButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void ScanButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel viewModel)
         {
@@ -43,7 +63,10 @@ public partial class MainWindow : Window
 
         if (Directory.Exists(viewModel.ProjectDirectory))
         {
-            viewModel.LoadDirectory(viewModel.ProjectDirectory);
+            await viewModel.LoadDirectoryAsync(viewModel.ProjectDirectory);
+            return;
         }
+
+        viewModel.ReportDirectorySelectionFailed("Choose a real photo directory before scanning.");
     }
 }
