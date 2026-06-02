@@ -30,6 +30,26 @@ public sealed class AiRatingParserTests
     }
 
     [Fact]
+    public void Parse_fails_when_root_json_is_not_an_object()
+    {
+        var result = AiRatingParser.Parse("[]");
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Rating);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    [Fact]
+    public void Parse_fails_when_score_is_not_a_number()
+    {
+        var result = AiRatingParser.Parse("""{"score":"4","category":"keep","reason":"sharp"}""");
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Rating);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    [Fact]
     public void Parse_fails_when_category_is_unknown()
     {
         var result = AiRatingParser.Parse("""{"score":4,"category":"archive","reason":"sharp subject"}""");

@@ -20,11 +20,21 @@ public static class AiRatingParser
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
 
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return Failure("AI rating JSON root must be an object.");
+            }
+
             if (!root.TryGetProperty("score", out var scoreElement) ||
                 !root.TryGetProperty("category", out var categoryElement) ||
                 !root.TryGetProperty("reason", out var reasonElement))
             {
                 return Failure("AI rating JSON must include score, category, and reason.");
+            }
+
+            if (scoreElement.ValueKind != JsonValueKind.Number)
+            {
+                return Failure("Score must be a number.");
             }
 
             if (!scoreElement.TryGetInt32(out var score))
