@@ -51,6 +51,59 @@ public sealed class ExportServiceTests
         Assert.True(File.Exists(sourceJpg));
     }
 
+    [Fact]
+    public void Export_suffixes_duplicate_file_names_from_different_source_directories()
+    {
+        using var tempDirectory = new TempDirectory();
+        var firstSourceDirectory = Path.Combine(tempDirectory.Path, "source-1");
+        var secondSourceDirectory = Path.Combine(tempDirectory.Path, "source-2");
+        var targetRoot = Path.Combine(tempDirectory.Path, "exports");
+        Directory.CreateDirectory(firstSourceDirectory);
+        Directory.CreateDirectory(secondSourceDirectory);
+        var firstSourceJpg = Path.Combine(firstSourceDirectory, "IMG_0001.JPG");
+        var secondSourceJpg = Path.Combine(secondSourceDirectory, "IMG_0001.JPG");
+        File.WriteAllText(firstSourceJpg, "first");
+        File.WriteAllText(secondSourceJpg, "second");
+        var timestamp = new DateTimeOffset(2026, 6, 3, 12, 34, 56, TimeSpan.Zero);
+        var photos = new[]
+        {
+            new PhotoItem(1, 1, "IMG_0001", firstSourceJpg, null, null, "unpaired"),
+            new PhotoItem(2, 1, "IMG_0001", secondSourceJpg, null, null, "unpaired"),
+        };
+
+        var result = new ExportService().Export(photos, targetRoot, timestamp);
+
+        Assert.Equal(2, result.ExportedFiles.Count);
+        Assert.Contains(Path.Combine(result.ExportDirectory, "IMG_0001.JPG"), result.ExportedFiles);
+        Assert.Contains(Path.Combine(result.ExportDirectory, "IMG_0001-2.JPG"), result.ExportedFiles);
+        Assert.Equal("first", File.ReadAllText(Path.Combine(result.ExportDirectory, "IMG_0001.JPG")));
+        Assert.Equal("second", File.ReadAllText(Path.Combine(result.ExportDirectory, "IMG_0001-2.JPG")));
+    }
+
+    [Fact]
+    public void Export_suffixes_destination_when_file_already_exists()
+    {
+        using var tempDirectory = new TempDirectory();
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "source");
+        var targetRoot = Path.Combine(tempDirectory.Path, "exports");
+        var exportDirectory = Path.Combine(targetRoot, "photo-selector-export-20260603-123456");
+        Directory.CreateDirectory(sourceDirectory);
+        Directory.CreateDirectory(exportDirectory);
+        var sourceJpg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        var existingDestination = Path.Combine(exportDirectory, "IMG_0001.JPG");
+        File.WriteAllText(sourceJpg, "new");
+        File.WriteAllText(existingDestination, "existing");
+        var timestamp = new DateTimeOffset(2026, 6, 3, 12, 34, 56, TimeSpan.Zero);
+        var photo = new PhotoItem(1, 1, "IMG_0001", sourceJpg, null, null, "unpaired");
+
+        var result = new ExportService().Export(new[] { photo }, targetRoot, timestamp);
+
+        var exportedFile = Assert.Single(result.ExportedFiles);
+        Assert.Equal(Path.Combine(exportDirectory, "IMG_0001-2.JPG"), exportedFile);
+        Assert.Equal("existing", File.ReadAllText(existingDestination));
+        Assert.Equal("new", File.ReadAllText(exportedFile));
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

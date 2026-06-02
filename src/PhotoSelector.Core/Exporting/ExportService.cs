@@ -13,24 +13,49 @@ public sealed class ExportService
         Directory.CreateDirectory(exportDirectory);
 
         var exportedFiles = new List<string>();
+        var usedDestinationPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var photo in photos)
         {
-            CopyIfPresent(photo.JpegPath, exportDirectory, exportedFiles);
-            CopyIfPresent(photo.RawPath, exportDirectory, exportedFiles);
+            CopyIfPresent(photo.JpegPath, exportDirectory, exportedFiles, usedDestinationPaths);
+            CopyIfPresent(photo.RawPath, exportDirectory, exportedFiles, usedDestinationPaths);
         }
 
         return new ExportResult(exportDirectory, exportedFiles);
     }
 
-    private static void CopyIfPresent(string? sourcePath, string exportDirectory, ICollection<string> exportedFiles)
+    private static void CopyIfPresent(
+        string? sourcePath,
+        string exportDirectory,
+        ICollection<string> exportedFiles,
+        ISet<string> usedDestinationPaths)
     {
         if (sourcePath is null || !File.Exists(sourcePath))
         {
             return;
         }
 
-        var destinationPath = Path.Combine(exportDirectory, Path.GetFileName(sourcePath));
+        var destinationPath = ResolveDestinationPath(sourcePath, exportDirectory, usedDestinationPaths);
         File.Copy(sourcePath, destinationPath);
+        usedDestinationPaths.Add(destinationPath);
         exportedFiles.Add(destinationPath);
+    }
+
+    private static string ResolveDestinationPath(
+        string sourcePath,
+        string exportDirectory,
+        ISet<string> usedDestinationPaths)
+    {
+        var fileName = Path.GetFileNameWithoutExtension(sourcePath);
+        var extension = Path.GetExtension(sourcePath);
+        var destinationPath = Path.Combine(exportDirectory, $"{fileName}{extension}");
+        var suffix = 2;
+
+        while (File.Exists(destinationPath) || usedDestinationPaths.Contains(destinationPath))
+        {
+            destinationPath = Path.Combine(exportDirectory, $"{fileName}-{suffix}{extension}");
+            suffix++;
+        }
+
+        return destinationPath;
     }
 }
