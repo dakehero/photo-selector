@@ -8,7 +8,7 @@ public static class PhotoScanner
     {
         var byBaseName = new Dictionary<string, (string? JpegPath, string? RawPath)>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var file in files)
+        foreach (var file in files.OrderBy(file => file, StringComparer.OrdinalIgnoreCase))
         {
             var kind = PhotoFileClassifier.Classify(file);
             if (kind == PhotoFileKind.Unsupported)
@@ -20,8 +20,8 @@ public static class PhotoScanner
             byBaseName.TryGetValue(baseName, out var paths);
 
             paths = kind == PhotoFileKind.Jpeg
-                ? (file, paths.RawPath)
-                : (paths.JpegPath, file);
+                ? (paths.JpegPath ?? file, paths.RawPath)
+                : (paths.JpegPath, paths.RawPath ?? file);
 
             byBaseName[baseName] = paths;
         }
