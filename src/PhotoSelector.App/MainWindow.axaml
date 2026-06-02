@@ -2,8 +2,296 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        xmlns:vm="using:PhotoSelector.App.ViewModels"
+        mc:Ignorable="d"
+        d:DesignWidth="1200"
+        d:DesignHeight="760"
+        Width="1200"
+        Height="760"
+        MinWidth="980"
+        MinHeight="640"
         x:Class="PhotoSelector.App.MainWindow"
-        Title="PhotoSelector.App">
-    Welcome to Avalonia!
+        x:DataType="vm:MainWindowViewModel"
+        Title="Photo Selector">
+    <Window.Styles>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#66716D" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#D8DED9" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.tool">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.primary">
+            <Setter Property="Background" Value="#2F7C6F" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#2F7C6F" />
+        </Style>
+        <Style Selector="TextBlock.muted">
+            <Setter Property="Foreground" Value="#66716D" />
+        </Style>
+        <Style Selector="TextBlock.badge">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="6,2" />
+        </Style>
+        <Style Selector="ListBox.photo-grid">
+            <Setter Property="Background" Value="#F4F6F3" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12" />
+        </Style>
+        <Style Selector="ListBox.photo-grid ListBoxItem">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="6" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="ListBox.photo-grid ListBoxItem:selected">
+            <Setter Property="Background" Value="#E2ECE8" />
+        </Style>
+    </Window.Styles>
+
+    <Grid Background="#F4F6F3" RowDefinitions="56,*" ColumnDefinitions="260,*,330">
+        <Border Grid.Row="0"
+                Grid.ColumnSpan="3"
+                Background="#FBFCFB"
+                BorderBrush="#D8DED9"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="14,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="10">
+                <TextBlock Grid.Column="0"
+                           Text="Photo Selector"
+                           FontWeight="SemiBold"
+                           FontSize="17"
+                           VerticalAlignment="Center"
+                           Margin="0,0,10,0" />
+                <Button Grid.Column="1" Classes="tool" Content="Open directory" />
+                <Button Grid.Column="2" Classes="tool" Content="Scan" />
+                <Button Grid.Column="3" Classes="tool primary" Content="AI scoring" />
+                <Button Grid.Column="4" Classes="tool" Content="Export selected" />
+                <Border Grid.Column="6"
+                        Classes="panel"
+                        CornerRadius="999"
+                        Padding="10,5"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding AiStatus}" Classes="muted" />
+                </Border>
+                <Button Grid.Column="7" Classes="tool" Content="Settings" />
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="1"
+                      Grid.Column="0"
+                      Background="White"
+                      BorderBrush="#D8DED9"
+                      BorderThickness="0,0,1,0">
+            <StackPanel Margin="16" Spacing="18">
+                <StackPanel>
+                    <TextBlock Text="Project Directory" Classes="section-title" />
+                    <Border Classes="panel" Background="#EEF1ED" Padding="10">
+                        <TextBlock Text="{Binding ProjectDirectory}" TextWrapping="Wrap" Foreground="#34413D" />
+                    </Border>
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="Scan Summary" Classes="section-title" />
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+                        <Border Grid.Row="0" Grid.Column="0" Classes="panel" Background="#F8FAF8" Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding TotalPhotos}" FontSize="22" FontWeight="SemiBold" />
+                                <TextBlock Text="photo items" Classes="muted" FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="0" Grid.Column="1" Classes="panel" Background="#F8FAF8" Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding PairedPhotos}" FontSize="22" FontWeight="SemiBold" />
+                                <TextBlock Text="JPG+RAW" Classes="muted" FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1" Grid.Column="0" Classes="panel" Background="#F8FAF8" Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding JpgOnlyPhotos}" FontSize="22" FontWeight="SemiBold" />
+                                <TextBlock Text="JPG only" Classes="muted" FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Row="1" Grid.Column="1" Classes="panel" Background="#F8FAF8" Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding RawOnlyPhotos}" FontSize="22" FontWeight="SemiBold" />
+                                <TextBlock Text="RAW only" Classes="muted" FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="Filters" Classes="section-title" />
+                    <ItemsControl ItemsSource="{Binding Filters}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:FilterItemViewModel">
+                                <Border CornerRadius="6"
+                                        Padding="8,7"
+                                        Margin="0,1"
+                                        Background="{Binding BackgroundBrush}">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Count}" Classes="muted" FontSize="12" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="AI Scoring Progress" Classes="section-title" />
+                    <TextBlock Text="{Binding AiProvider}" Classes="muted" FontSize="12" />
+                    <ProgressBar Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding AiProgressPercent}"
+                                 Height="8"
+                                 Margin="0,8,0,0"
+                                 Foreground="#2F7C6F" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="46,*">
+            <Border Grid.Row="0"
+                    Background="#FBFCFB"
+                    BorderBrush="#D8DED9"
+                    BorderThickness="0,0,0,1">
+                <Grid Margin="14,7" ColumnDefinitions="220,190,*,Auto" ColumnSpacing="10">
+                    <TextBox Grid.Column="0" PlaceholderText="Search by file name" />
+                    <ComboBox Grid.Column="1" SelectedIndex="0">
+                        <ComboBoxItem>Sort by AI score</ComboBoxItem>
+                        <ComboBoxItem>Sort by capture time</ComboBoxItem>
+                        <ComboBoxItem>Sort by user mark</ComboBoxItem>
+                    </ComboBox>
+                    <TextBlock Grid.Column="3"
+                               Text="Shortcuts: K keep - M maybe - R reject - 1-5 stars"
+                               Classes="muted"
+                               FontSize="12"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <ListBox Grid.Row="1"
+                     Classes="photo-grid"
+                     ItemsSource="{Binding Photos}"
+                     SelectedItem="{Binding SelectedPhoto}">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PhotoItemViewModel">
+                        <Border Classes="panel"
+                                Width="166"
+                                Height="178"
+                                Background="White"
+                                ClipToBounds="True">
+                            <Grid RowDefinitions="112,*">
+                                <Border Background="{Binding ToneBrush}">
+                                    <Border Background="#40FFFFFF"
+                                            Width="76"
+                                            Height="54"
+                                            CornerRadius="40"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Grid.Row="1" Margin="8,6" Spacing="3">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <StackPanel Orientation="Horizontal" Spacing="5">
+                                        <Border Background="{Binding CategoryBrush}" CornerRadius="999" Padding="6,2">
+                                            <TextBlock Text="{Binding AiScoreSummary}" Classes="badge" />
+                                        </Border>
+                                        <Border Background="#485550" CornerRadius="999" Padding="6,2">
+                                            <TextBlock Text="{Binding PairStatus}" Classes="badge" />
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding PairFileSummary}" Classes="muted" FontSize="12" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1"
+                      Grid.Column="2"
+                      Background="White"
+                      BorderBrush="#D8DED9"
+                      BorderThickness="1,0,0,0">
+            <StackPanel Margin="16" Spacing="16">
+                <Border Height="188"
+                        CornerRadius="7"
+                        BorderBrush="#D8DED9"
+                        BorderThickness="1"
+                        Background="{Binding SelectedPhoto.ToneBrush}">
+                    <Border Background="#4DFFFFFF"
+                            Width="128"
+                            Height="88"
+                            CornerRadius="60"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+                </Border>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding SelectedPhoto.Name}" FontSize="19" FontWeight="Bold" />
+                    <Grid ColumnDefinitions="86,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
+                        <TextBlock Grid.Row="0" Text="JPG" Classes="muted" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SelectedPhoto.JpgFileName}" />
+                        <TextBlock Grid.Row="1" Text="RAW" Classes="muted" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedPhoto.RawFileName}" />
+                        <TextBlock Grid.Row="2" Text="AI score" Classes="muted" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedPhoto.AiScoreSummary}" />
+                        <TextBlock Grid.Row="3" Text="User mark" Classes="muted" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedPhoto.UserDecision}" />
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="User Decision" Classes="section-title" />
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
+                        <Button Grid.Column="0" Content="Keep" Foreground="#197A52" />
+                        <Button Grid.Column="1" Content="Maybe" Foreground="#9B6A18" />
+                        <Button Grid.Column="2" Content="Reject" Foreground="#9D3636" />
+                    </Grid>
+                    <Grid ColumnDefinitions="*,*,*,*,*" ColumnSpacing="6" Margin="0,10,0,0">
+                        <Button Grid.Column="0" Content="1" />
+                        <Button Grid.Column="1" Content="2" />
+                        <Button Grid.Column="2" Content="3" />
+                        <Button Grid.Column="3" Content="4" />
+                        <Button Grid.Column="4" Content="5" />
+                    </Grid>
+                    <TextBlock Text="{Binding SelectedPhoto.Stars}" Foreground="#8B6B24" FontSize="18" Margin="2,8,0,0" />
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="AI Reason" Classes="section-title" />
+                    <Border Classes="panel" Background="#FAFBFA" Padding="10">
+                        <TextBlock Text="{Binding SelectedPhoto.AiReason}" TextWrapping="Wrap" Foreground="#33403C" />
+                    </Border>
+                </StackPanel>
+
+                <StackPanel>
+                    <TextBlock Text="Notes" Classes="section-title" />
+                    <TextBox MinHeight="82"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             PlaceholderText="Add a manual note for this photo" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </Window>
