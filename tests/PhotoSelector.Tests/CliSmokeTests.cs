@@ -91,6 +91,10 @@ public sealed class CliSmokeTests
     {
         using var tempDirectory = new TempDirectory();
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
+        using (var database = ProjectDatabase.Open(databasePath))
+        {
+            database.Migrate();
+        }
 
         var output = new StringWriter();
         var error = new StringWriter();

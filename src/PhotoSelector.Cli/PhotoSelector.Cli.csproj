@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PhotoSelector.Core\PhotoSelector.Core.csproj" />
     <ProjectReference Include="..\PhotoSelector.Ai\PhotoSelector.Ai.csproj" />
+    <ProjectReference Include="..\PhotoSelector.Config\PhotoSelector.Config.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
