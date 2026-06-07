@@ -1,6 +1,6 @@
 namespace PhotoSelector.Config.Secrets;
 
-public sealed record ApiKeyResolution(bool IsAvailable, string Source, string? Error);
+public sealed record ApiKeyResolution(bool IsAvailable, string Source, string? Error, string? Secret = null);
 
 public static class ApiKeyResolver
 {
@@ -11,7 +11,7 @@ public static class ApiKeyResolver
             var secret = secretStore.Get(profile.ApiKeyRef);
             if (!string.IsNullOrEmpty(secret))
             {
-                return new ApiKeyResolution(true, "api_key_ref", null);
+                return new ApiKeyResolution(true, "api_key_ref", null, secret);
             }
         }
 
@@ -20,7 +20,7 @@ public static class ApiKeyResolver
             var secret = Environment.GetEnvironmentVariable(profile.ApiKeyEnv);
             if (!string.IsNullOrEmpty(secret))
             {
-                return new ApiKeyResolution(true, "api_key_env", null);
+                return new ApiKeyResolution(true, "api_key_env", null, secret);
             }
 
             return new ApiKeyResolution(false, "api_key_env", $"Environment variable {profile.ApiKeyEnv} is not set.");

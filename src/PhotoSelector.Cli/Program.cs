@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PhotoSelector.Ai.Ratings;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Exporting;
@@ -25,7 +26,13 @@ public static class CliApp
         return Run(args, output, error, Console.In, SecretStoreFactory.CreateDefault());
     }
 
-    public static int Run(string[] args, TextWriter output, TextWriter error, TextReader input, ISecretStore? secretStore = null)
+    public static int Run(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        TextReader input,
+        ISecretStore? secretStore = null,
+        IPhotoRatingClient? ratingClient = null)
     {
         if (args.Length == 0)
         {
@@ -43,7 +50,8 @@ public static class CliApp
                 "scan" => RunScan(args, output, error),
                 "list" => RunList(args, output, error),
                 "export" => RunExport(args, output, error),
-                "rate" => RunRate(args, output, error, secretStore),
+                "rate" => RunRate(args, output, error, secretStore, ratingClient),
+                "audit" => RunAudit(args, output, error),
                 _ => WriteUsage(error),
             };
         }
@@ -94,6 +102,12 @@ public static class CliApp
             case "api_key_env":
                 profile.ApiKeyEnv = args[3];
                 break;
+            case "prompt":
+                profile.Prompt = args[3];
+                break;
+            case "output_language":
+                profile.OutputLanguage = args[3];
+                break;
             case "concurrency":
                 if (!int.TryParse(args[3], out var concurrency) || concurrency < 1)
                 {
@@ -126,6 +140,8 @@ public static class CliApp
         output.WriteLine($"model: {profile.Model}");
         output.WriteLine($"api_key_ref: {profile.ApiKeyRef ?? "(not set)"}");
         output.WriteLine($"api_key_env: {profile.ApiKeyEnv ?? "(not set)"}");
+        output.WriteLine($"prompt: {(string.IsNullOrWhiteSpace(profile.Prompt) ? "(default)" : profile.Prompt)}");
+        output.WriteLine($"output_language: {profile.OutputLanguage}");
         output.WriteLine($"concurrency: {profile.Concurrency}");
         return 0;
     }
@@ -175,7 +191,7 @@ public static class CliApp
                 project.SourceDirectory,
                 project.CreatedAt,
                 project.LastOpenedAt,
-                database.ListPhotos(project.Id).Select(ToPhotoJson).ToArray()))
+                database.ListPhotos(project.Id).Select(photo => ToPhotoJson(photo, database)).ToArray()))
             .ToArray();
 
         output.WriteLine(JsonSerializer.Serialize(new ListJson(projects), JsonOptions));
@@ -204,17 +220,36 @@ public static class CliApp
         return 0;
     }
 
-    private static int RunRate(string[] args, TextWriter output, TextWriter error, ISecretStore secretStore)
+    private static int RunRate(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
     {
-        if (args.Length is not (2 or 4))
+        if (args.Length < 2)
         {
             return WriteUsage(error);
         }
 
-        if (args.Length == 4 &&
-            (args[2] != "--provider" ||
-             !string.Equals(args[3], "openai-compatible", StringComparison.OrdinalIgnoreCase)))
+        var force = false;
+        string? providerOverride = null;
+        for (var index = 2; index < args.Length; index++)
         {
+            if (args[index] == "--force")
+            {
+                force = true;
+                continue;
+            }
+
+            if (args[index] == "--provider" &&
+                index + 1 < args.Length)
+            {
+                providerOverride = args[index + 1];
+                index++;
+                continue;
+            }
+
             return WriteUsage(error);
         }
 
@@ -228,11 +263,118 @@ public static class CliApp
         var store = new ConfigStore();
         var config = store.Load();
         var profile = config.GetOrCreateProfile(config.ActiveProfile);
+        if (!string.IsNullOrWhiteSpace(providerOverride))
+        {
+            profile.Provider = providerOverride;
+        }
+
         var apiKey = ApiKeyResolver.Resolve(profile, secretStore);
+        if (!apiKey.IsAvailable || string.IsNullOrEmpty(apiKey.Secret))
+        {
+            error.WriteLine(apiKey.Error ?? "API key is unavailable.");
+            return 1;
+        }
+
+        if (!ProviderRatingClientFactory.IsSupported(profile.Provider))
+        {
+            error.WriteLine($"Unsupported provider: {profile.Provider}");
+            return 1;
+        }
+
+        if (!Uri.TryCreate(profile.BaseUrl, UriKind.Absolute, out var baseUrl))
+        {
+            error.WriteLine($"Invalid base_url: {profile.BaseUrl}");
+            return 1;
+        }
+
+        using var database = OpenExistingDatabase(databasePath);
+        var photos = database
+            .ListProjects()
+            .SelectMany(project => database.ListPhotos(project.Id))
+            .ToArray();
+
+        using var ownedClient = ratingClient is null ? ProviderRatingClientFactory.Create(profile.Provider) : null;
+        var client = ratingClient ?? ownedClient!;
+        var prompt = BuildRatingPrompt(profile);
+        var rated = 0;
+        var skipped = 0;
+        var failed = 0;
+
+        foreach (var photo in photos)
+        {
+            if (!force && database.ListRatings(photo.Id).Count > 0)
+            {
+                skipped++;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(photo.JpegPath) || !File.Exists(photo.JpegPath))
+            {
+                skipped++;
+                continue;
+            }
+
+            try
+            {
+                var result = client
+                    .RatePhotoAsync(
+                        new PhotoRatingRequest(baseUrl, apiKey.Secret, profile.Model, prompt, photo.JpegPath),
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                var rating = result.Rating;
+                if (rating is null)
+                {
+                    database.SaveRatingAuditLog(
+                        photo.Id,
+                        null,
+                        profile.Provider,
+                        profile.Model,
+                        result.Audit.Prompt,
+                        result.Audit.RequestJsonRedacted,
+                        result.Audit.RawMessageContent,
+                        result.Audit.RawResponseJson,
+                        result.Audit.HttpStatus,
+                        result.Audit.Error);
+                    failed++;
+                    error.WriteLine($"{photo.BaseName}: {result.Audit.Error ?? "AI rating response could not be parsed."}");
+                    continue;
+                }
+
+                var criteriaJson = JsonSerializer.Serialize(rating.Criteria, JsonOptions);
+                var ratingId = database.SaveRating(
+                    photo.Id,
+                    profile.Provider,
+                    profile.Model,
+                    rating.PhotoType,
+                    rating.Score,
+                    rating.Category,
+                    criteriaJson,
+                    rating.Reason);
+                database.SaveRatingAuditLog(
+                    photo.Id,
+                    ratingId,
+                    profile.Provider,
+                    profile.Model,
+                    result.Audit.Prompt,
+                    result.Audit.RequestJsonRedacted,
+                    result.Audit.RawMessageContent,
+                    result.Audit.RawResponseJson,
+                    result.Audit.HttpStatus,
+                    result.Audit.Error);
+                rated++;
+                output.WriteLine($"{photo.BaseName}: {rating.Score} {rating.Category} - {rating.Reason}");
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                error.WriteLine($"{photo.BaseName}: {ex.Message}");
+            }
+        }
 
         output.WriteLine(
-            $"AI rating via {profile.Provider} model {profile.Model} is not wired yet; config loaded from {store.ConfigPath}; key source: {apiKey.Source}; key available: {apiKey.IsAvailable}.");
-        return 0;
+            $"Rated {rated} photo(s), skipped {skipped}, failed {failed}. Provider: {profile.Provider}; model: {profile.Model}; key source: {apiKey.Source}; config: {store.ConfigPath}");
+        return failed == 0 ? 0 : 1;
     }
 
     private static int RunAuth(string[] args, TextWriter output, TextWriter error, TextReader input, ISecretStore secretStore)
@@ -283,6 +425,42 @@ public static class CliApp
         return 0;
     }
 
+    private static int RunAudit(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 5 || args[2] != "--photo-id" || args[4] != "--json")
+        {
+            return WriteUsage(error);
+        }
+
+        if (!long.TryParse(args[3], out var photoId) || photoId < 1)
+        {
+            error.WriteLine("photo-id must be a positive integer.");
+            return 1;
+        }
+
+        using var database = OpenExistingDatabase(args[1]);
+        var logs = database
+            .ListRatingAuditLogs(photoId)
+            .Select(log => new AuditLogJson(
+                log.Id,
+                log.PhotoId,
+                log.RatingId,
+                log.Provider,
+                log.Model,
+                log.Prompt,
+                log.RequestJsonRedacted,
+                log.RawMessageContent,
+                log.RawResponseJson,
+                log.HttpStatus,
+                log.Error,
+                log.CreatedAt))
+            .ToArray();
+
+        output.WriteLine(JsonSerializer.Serialize(new AuditJson(logs), JsonOptions));
+        return 0;
+    }
+
+
     private static int RunAuthStatus(string[] args, TextWriter output, TextWriter error, ISecretStore secretStore)
     {
         var profileName = GetOption(args, "--profile") ?? new ConfigStore().Load().ActiveProfile;
@@ -292,6 +470,7 @@ public static class CliApp
         var resolution = ApiKeyResolver.Resolve(profile, secretStore);
 
         output.WriteLine($"profile: {profileName}");
+        output.WriteLine($"secret_store: {secretStore.ProviderName}");
         output.WriteLine($"api_key_ref: {profile.ApiKeyRef ?? "(not set)"}");
         output.WriteLine($"api_key_env: {profile.ApiKeyEnv ?? "(not set)"}");
         output.WriteLine(resolution.IsAvailable ? $"key: available via {resolution.Source}" : $"key: unavailable ({resolution.Error})");
@@ -326,7 +505,16 @@ public static class CliApp
         }
 
         var database = ProjectDatabase.Open(fullPath);
-        database.Migrate();
+        try
+        {
+            database.Migrate();
+        }
+        catch
+        {
+            database.Dispose();
+            throw;
+        }
+
         return database;
     }
 
@@ -335,8 +523,9 @@ public static class CliApp
         return Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
     }
 
-    private static PhotoJson ToPhotoJson(PhotoItem photo)
+    private static PhotoJson ToPhotoJson(PhotoItem photo, ProjectDatabase database)
     {
+        var latestRating = database.ListRatings(photo.Id).FirstOrDefault();
         return new PhotoJson(
             photo.Id,
             photo.ProjectId,
@@ -344,7 +533,31 @@ public static class CliApp
             photo.JpegPath,
             photo.RawPath,
             photo.CaptureTime,
-            photo.ImportStatus);
+            photo.ImportStatus,
+            latestRating is null
+                ? null
+                : new RatingJson(
+                    latestRating.Id,
+                    latestRating.Provider,
+                    latestRating.Model,
+                    latestRating.PhotoType,
+                    latestRating.Score,
+                    latestRating.Category,
+                    ParseCriteriaJson(latestRating.CriteriaJson),
+                    latestRating.Reason,
+                    latestRating.CreatedAt));
+    }
+
+    private static RatingCriterionJson[] ParseCriteriaJson(string criteriaJson)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<RatingCriterionJson[]>(criteriaJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 
     private static int WriteUsage(TextWriter error)
@@ -353,12 +566,13 @@ public static class CliApp
         error.WriteLine("  photo-selector auth login --profile default --api-key-stdin");
         error.WriteLine("  photo-selector auth status --profile default");
         error.WriteLine("  photo-selector auth logout --profile default");
-        error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|concurrency> <value>");
+        error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|prompt|output_language|concurrency> <value>");
         error.WriteLine("  photo-selector config list");
         error.WriteLine("  photo-selector scan <directory>");
         error.WriteLine("  photo-selector list <project-db> --json");
         error.WriteLine("  photo-selector export <project-db> --category keep --out <directory>");
-        error.WriteLine("  photo-selector rate <project-db> [--provider openai-compatible]");
+        error.WriteLine("  photo-selector rate <project-db> [--provider openai-compatible] [--force]");
+        error.WriteLine("  photo-selector audit <project-db> --photo-id <id> --json");
         return 1;
     }
 
@@ -377,6 +591,22 @@ public static class CliApp
 
     private sealed record ListJson(ProjectJson[] Projects);
 
+    private sealed record AuditJson(AuditLogJson[] Logs);
+
+    private sealed record AuditLogJson(
+        long Id,
+        long PhotoId,
+        long? RatingId,
+        string Provider,
+        string Model,
+        string Prompt,
+        string RequestJsonRedacted,
+        string RawMessageContent,
+        string RawResponseJson,
+        int? HttpStatus,
+        string? Error,
+        DateTimeOffset CreatedAt);
+
     private sealed record ProjectJson(
         long Id,
         string SourceDirectory,
@@ -391,5 +621,33 @@ public static class CliApp
         string? JpegPath,
         string? RawPath,
         DateTimeOffset? CaptureTime,
-        string ImportStatus);
+        string ImportStatus,
+        RatingJson? LatestRating);
+
+    private sealed record RatingJson(
+        long Id,
+        string Provider,
+        string Model,
+        string PhotoType,
+        double Score,
+        string Category,
+        RatingCriterionJson[] Criteria,
+        string Reason,
+        DateTimeOffset CreatedAt);
+
+    private sealed record RatingCriterionJson(string Name, double Score, string Comment);
+
+    private static string BuildRatingPrompt(AiProfile profile)
+    {
+        var prompt = string.IsNullOrWhiteSpace(profile.Prompt)
+            ? DefaultPhotoRatingPrompt.Text
+            : profile.Prompt;
+
+        return $"""
+            {prompt}
+
+            Output all human-readable comments and verdicts in {profile.OutputLanguage}.
+            Keep JSON property names exactly as specified.
+            """;
+    }
 }

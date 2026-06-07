@@ -181,7 +181,7 @@
                         <ComboBoxItem>Sort by user mark</ComboBoxItem>
                     </ComboBox>
                     <TextBlock Grid.Column="3"
-                               Text="Shortcuts: K keep - M maybe - R reject - 1-5 stars"
+                               Text="Shortcuts: K keep - M maybe - R reject - 1-10 score"
                                Classes="muted"
                                FontSize="12"
                                Width="155"

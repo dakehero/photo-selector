@@ -4,6 +4,8 @@ public sealed class MemorySecretStore : ISecretStore
 {
     private readonly Dictionary<string, string> secrets = new(StringComparer.Ordinal);
 
+    public string ProviderName => "memory";
+
     public void Set(string keyRef, string secret)
     {
         secrets[keyRef] = secret;

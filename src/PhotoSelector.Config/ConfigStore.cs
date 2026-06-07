@@ -94,6 +94,8 @@ public sealed class ConfigStore
             AppendString(builder, "model", profile.Value.Model);
             AppendNullableString(builder, "api_key_ref", profile.Value.ApiKeyRef);
             AppendNullableString(builder, "api_key_env", profile.Value.ApiKeyEnv);
+            AppendNullableString(builder, "prompt", profile.Value.Prompt);
+            AppendString(builder, "output_language", profile.Value.OutputLanguage);
             builder.Append("concurrency = ");
             builder.AppendLine(profile.Value.Concurrency.ToString(CultureInfo.InvariantCulture));
             builder.AppendLine();
@@ -120,6 +122,12 @@ public sealed class ConfigStore
                 break;
             case "api_key_env":
                 profile.ApiKeyEnv = ParseString(value);
+                break;
+            case "prompt":
+                profile.Prompt = ParseString(value);
+                break;
+            case "output_language":
+                profile.OutputLanguage = ParseString(value) ?? profile.OutputLanguage;
                 break;
             case "concurrency":
                 if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var concurrency))

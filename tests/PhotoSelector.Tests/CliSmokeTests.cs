@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PhotoSelector.Cli;
+using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.Tests;
@@ -87,26 +88,38 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public void Rate_openai_compatible_provider_is_a_successful_placeholder()
+    public void Rate_openai_compatible_provider_succeeds_when_database_has_no_photos()
     {
         using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment("PHOTO_SELECTOR_CONFIG_HOME", tempDirectory.Path);
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
         using (var database = ProjectDatabase.Open(databasePath))
         {
             database.Migrate();
         }
 
+        var secretStore = new MemorySecretStore();
+        Assert.Equal(
+            0,
+            CliApp.Run(
+                ["auth", "login", "--profile", "default", "--api-key-stdin"],
+                TextWriter.Null,
+                TextWriter.Null,
+                new StringReader("sk-test\n"),
+                secretStore));
+
         var output = new StringWriter();
         var error = new StringWriter();
         var exitCode = CliApp.Run(
             new[] { "rate", databasePath, "--provider", "openai-compatible" },
             output,
-            error);
+            error,
+            TextReader.Null,
+            secretStore);
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
-        Assert.Contains("not", output.ToString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("wired", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Rated 0 photo(s)", output.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CreateScannedSource(string rootDirectory)
@@ -139,6 +152,24 @@ public sealed class CliSmokeTests
         public void Dispose()
         {
             Directory.Delete(Path, recursive: true);
+        }
+    }
+
+    private sealed class ScopedEnvironment : IDisposable
+    {
+        private readonly string name;
+        private readonly string? previousValue;
+
+        public ScopedEnvironment(string name, string value)
+        {
+            this.name = name;
+            previousValue = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(name, previousValue);
         }
     }
 }

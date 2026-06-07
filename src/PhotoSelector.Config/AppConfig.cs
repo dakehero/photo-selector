@@ -34,4 +34,8 @@ public sealed class AiProfile
     public string? ApiKeyEnv { get; set; }
 
     public int Concurrency { get; set; } = 2;
+
+    public string? Prompt { get; set; }
+
+    public string OutputLanguage { get; set; } = "English";
 }

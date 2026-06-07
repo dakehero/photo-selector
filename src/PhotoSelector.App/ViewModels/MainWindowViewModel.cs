@@ -287,11 +287,11 @@ public sealed record PhotoItemViewModel(
 
     public string PairFileSummary => HasPair ? $"{JpgFileName} + {RawFileName}" : PairStatus;
 
-    public string AiScoreSummary => $"{AiScore} / 5 - {AiCategory}";
+    public string AiScoreSummary => $"{AiScore} / 10 - {AiCategory}";
 
     public string UserDecision => "Not reviewed";
 
-    public string Stars => new string('*', AiScore).PadRight(5, '-');
+    public string Stars => new string('*', AiScore).PadRight(10, '-');
 
     public IBrush ToneBrush => SolidColorBrush.Parse($"#{Tone}");
 

@@ -1,5 +1,6 @@
 using PhotoSelector.Cli;
 using PhotoSelector.Config.Secrets;
+using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.Tests;
 
@@ -19,6 +20,7 @@ public sealed class CliConfigTests
         Assert.Equal(0, CliApp.Run(["config", "set", "base_url", "https://api.openai.com/v1"], output, error, TextReader.Null, secretStore));
         Assert.Equal(0, CliApp.Run(["config", "set", "model", "gpt-4.1-mini"], output, error, TextReader.Null, secretStore));
         Assert.Equal(0, CliApp.Run(["config", "set", "api_key_env", "OPENAI_API_KEY"], output, error, TextReader.Null, secretStore));
+        Assert.Equal(0, CliApp.Run(["config", "set", "output_language", "zh-Hans"], output, error, TextReader.Null, secretStore));
 
         var configPath = Path.Combine(tempDirectory.Path, "config.toml");
         Assert.True(File.Exists(configPath));
@@ -28,6 +30,7 @@ public sealed class CliConfigTests
         Assert.Contains("base_url = \"https://api.openai.com/v1\"", toml);
         Assert.Contains("model = \"gpt-4.1-mini\"", toml);
         Assert.Contains("api_key_env = \"OPENAI_API_KEY\"", toml);
+        Assert.Contains("output_language = \"zh-Hans\"", toml);
         Assert.Equal(string.Empty, error.ToString());
     }
 
@@ -36,7 +39,11 @@ public sealed class CliConfigTests
     {
         using var tempDirectory = new TempDirectory();
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
-        File.WriteAllText(databasePath, "placeholder");
+        using (var database = ProjectDatabase.Open(databasePath))
+        {
+            database.Migrate();
+        }
+
         var secretStore = new MemorySecretStore();
 
         using var env = new ScopedEnvironment("PHOTO_SELECTOR_CONFIG_HOME", tempDirectory.Path);
@@ -66,6 +73,7 @@ public sealed class CliConfigTests
         Assert.Equal(0, statusExitCode);
         Assert.Contains("photo-selector/default", statusOutput.ToString());
         Assert.Contains("available", statusOutput.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("secret_store: memory", statusOutput.ToString());
         Assert.Equal(string.Empty, statusError.ToString());
 
         var rateOutput = new StringWriter();
@@ -78,6 +86,7 @@ public sealed class CliConfigTests
             secretStore);
 
         Assert.Equal(0, rateExitCode);
+        Assert.Contains("Rated 0 photo(s)", rateOutput.ToString());
         Assert.Contains("openai-compatible", rateOutput.ToString());
         Assert.Contains("gpt-4.1-mini", rateOutput.ToString());
         Assert.Contains("api_key_ref", rateOutput.ToString());
