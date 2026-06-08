@@ -1,4 +1,5 @@
 using PhotoSelector.App.ViewModels;
+using PhotoSelector.Config;
 using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.Tests;
@@ -9,6 +10,7 @@ public sealed class MainWindowViewModelTests
     public void LoadDirectory_scans_photos_updates_summary_and_persists_project_database()
     {
         using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
         File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.JPG"), "");
         File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.CR3"), "");
         File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0002.JPG"), "");
@@ -51,8 +53,10 @@ public sealed class MainWindowViewModelTests
                 Assert.Equal("RAW only", photo.PairStatus);
             });
 
-        var databasePath = Path.Combine(tempDirectory.Path, ".photo-selector", "photo-selector.db");
+        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
+        var sidecarDatabasePath = Path.Combine(tempDirectory.Path, ".photo-selector", "photo-selector.db");
         Assert.True(File.Exists(databasePath));
+        Assert.False(File.Exists(sidecarDatabasePath));
 
         using var database = ProjectDatabase.Open(databasePath);
         var project = Assert.Single(database.ListProjects());
@@ -64,6 +68,7 @@ public sealed class MainWindowViewModelTests
     public void LoadDirectory_reuses_existing_project_and_replaces_photos()
     {
         using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
         File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.JPG"), "");
         File.WriteAllText(Path.Combine(tempDirectory.Path, "IMG_0001.CR3"), "");
 
@@ -75,7 +80,7 @@ public sealed class MainWindowViewModelTests
 
         viewModel.LoadDirectory(Path.Combine(tempDirectory.Path, "."));
 
-        var databasePath = Path.Combine(tempDirectory.Path, ".photo-selector", "photo-selector.db");
+        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
         using var database = ProjectDatabase.Open(databasePath);
         var project = Assert.Single(database.ListProjects());
         var photos = database.ListPhotos(project.Id);
@@ -114,6 +119,24 @@ public sealed class MainWindowViewModelTests
         public void Dispose()
         {
             Directory.Delete(Path, recursive: true);
+        }
+    }
+
+    private sealed class ScopedEnvironment : IDisposable
+    {
+        private readonly string name;
+        private readonly string? previousValue;
+
+        public ScopedEnvironment(string name, string value)
+        {
+            this.name = name;
+            previousValue = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(name, previousValue);
         }
     }
 }

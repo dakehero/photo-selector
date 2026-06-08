@@ -19,6 +19,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhotoSelector.Tests", "test
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhotoSelector.Config", "src\PhotoSelector.Config\PhotoSelector.Config.csproj", "{B2647E0B-8688-448D-B281-D37F70A5B3DA}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhotoSelector.Agent", "src\PhotoSelector.Agent\PhotoSelector.Agent.csproj", "{77B50167-1EE0-4C27-9636-3478139BF5CB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -101,6 +103,18 @@ Global
 		{B2647E0B-8688-448D-B281-D37F70A5B3DA}.Release|x64.Build.0 = Release|Any CPU
 		{B2647E0B-8688-448D-B281-D37F70A5B3DA}.Release|x86.ActiveCfg = Release|Any CPU
 		{B2647E0B-8688-448D-B281-D37F70A5B3DA}.Release|x86.Build.0 = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|x64.Build.0 = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Debug|x86.Build.0 = Debug|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|x64.ActiveCfg = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|x64.Build.0 = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|x86.ActiveCfg = Release|Any CPU
+		{77B50167-1EE0-4C27-9636-3478139BF5CB}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -112,5 +126,6 @@ Global
 		{7B6F8295-BB87-4859-AFCF-D605D9B0177A} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{E7CC035F-BAA3-43FD-862C-89BC86DC230E} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{B2647E0B-8688-448D-B281-D37F70A5B3DA} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{77B50167-1EE0-4C27-9636-3478139BF5CB} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

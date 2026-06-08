@@ -18,6 +18,9 @@ The C# codebase is the local engine. The UI shell is replaceable: Avalonia may r
   - `Ratings`: prompt contract, rating parser, provider clients, request payload construction, and provider factory.
 - `src/PhotoSelector.Config`: shared config and credentials.
   - `Secrets`: system and memory credential providers; platform-specific providers live in separate files.
+- `src/PhotoSelector.Agent`: shared workflow and worker orchestration above core/config/AI.
+  - `Workflows`: import and future scan/status workflow composition.
+  - `Workers`: queued rating job processing and future worker loops.
 - `src/PhotoSelector.Cli`: command surface for humans, scripts, and future agent/MCP calls.
 - `src/PhotoSelector.App`: current Avalonia shell. Treat as replaceable presentation, not the source of product logic.
 - `tests/PhotoSelector.Tests`: regression tests across core, config, AI, CLI, and app view models.
@@ -26,6 +29,8 @@ The C# codebase is the local engine. The UI shell is replaceable: Avalonia may r
 
 - Keep business logic out of UI projects. Put scanning, rating, storage, export, and provider behavior in `Core`, `Ai`, or `Config`.
 - Keep CLI command handlers thin. If command logic grows beyond argument parsing and orchestration, extract it into core/application services.
+- Put shared import/process/status worker orchestration in `PhotoSelector.Agent`, not in CLI or UI code.
+- Prefer the catalog-first workflow: import directories into the shared catalog first, then open, list, rate, and export by project identity.
 - Do not add provider-specific branches deep inside CLI code. Add or modify provider adapters and factories.
 - Do not let `ProjectDatabase` become a broad application service. It owns SQLite persistence only; workflow logic belongs outside it.
 - Do not add new platform-specific credential code to `SecretStoreFactory`; create a dedicated provider file.
@@ -64,6 +69,32 @@ AI rating JSON must include `photo_type`, `score`, `category`, `criteria`, and `
 - `score` and each criterion score are `1.0` to `10.0` with exactly one decimal place.
 - `category` must match score: `keep` for `8.0-10.0`, `maybe` for `5.0-7.9`, `reject` for `1.0-4.9`.
 - Human-readable comments follow `output_language`; JSON property names stay stable English.
+
+## Catalog Workflow
+
+Default workflows use the shared SQLite catalog at `ConfigPaths.GetDatabasePath()`.
+
+- `import <directory>` is the indexing/background-friendly entry point. It creates or updates a project, indexes JPG+RAW pairs, enqueues pending work when job queues exist, and should not require AI results before returning.
+- `scan <directory>` is the synchronous fast path. It imports or updates a directory, rates imported photos, and returns a result summary before exiting.
+- `status [directory]` reports global or directory-specific work/results status.
+- `process [directory]` processes existing pending work until idle. It must not rescan files.
+- `flush <directory>` refreshes file input: rescan the directory, update the index, and requeue work. It must not delete existing ratings by default.
+- `flush <directory> --now` performs `flush` and then synchronously processes pending work for that directory.
+- `reset ratings <directory>` resets AI rating outputs for that directory. It is distinct from `flush`: use `flush` to refresh files and pending work; use `reset ratings` to remove AI decisions.
+- `reset ratings <directory> --with-audit` may delete audit logs too. By default, preserve audit logs for traceability.
+- `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates without exposing database paths.
+- `export <keep|maybe|reject> <directory> <target>` copies JPG+RAW pairs whose latest AI rating matches the category into a timestamped export directory.
+- `projects list --json` lists indexed projects without exposing a database path.
+- `open <project-id|directory> --json` returns one project context and its photos.
+- `photos list --project <project-id> --json` returns photos for one project.
+- Do not add user-facing commands that require SQLite database paths. Database paths are an internal/debug concern, not product UX.
+
+Worker implementation detail:
+
+- CLI, GUI, and future MCP surfaces should expose user actions such as `scan`, `process`, `flush`, and `status`, not a user-facing `worker` command.
+- GUI startup may automatically run the worker loop in the background.
+- Shared job/worker orchestration should live above `Core`, likely in a future `PhotoSelector.Agent` or `PhotoSelector.Workflows` project that depends on `Core`, `Ai`, and `Config`.
+- `Core` may own durable job tables and storage primitives, but it should not depend on provider clients, config resolution, or worker orchestration.
 
 ## Engineering Rules
 

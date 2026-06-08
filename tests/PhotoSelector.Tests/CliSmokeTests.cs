@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PhotoSelector.Cli;
+using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Storage;
 
@@ -8,9 +9,54 @@ namespace PhotoSelector.Tests;
 public sealed class CliSmokeTests
 {
     [Fact]
-    public void Scan_creates_project_database_from_directory_with_jpg_and_raw_files()
+    public void Import_indexes_directory_then_catalog_commands_open_project_and_photos()
     {
         using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = CreateSourceDirectory(tempDirectory.Path);
+        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
+
+        var importOutput = new StringWriter();
+        var importError = new StringWriter();
+        var importExitCode = CliApp.Run(["import", sourceDirectory], importOutput, importError);
+
+        Assert.Equal(0, importExitCode);
+        Assert.Equal(string.Empty, importError.ToString());
+        Assert.True(File.Exists(databasePath));
+        Assert.Contains("Imported 2 photo(s)", importOutput.ToString());
+        Assert.Contains("Project: 1", importOutput.ToString());
+        Assert.Contains(databasePath, importOutput.ToString());
+
+        var projectsOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["projects", "list", "--json"], projectsOutput, TextWriter.Null));
+        using var projectsDocument = JsonDocument.Parse(projectsOutput.ToString());
+        var project = Assert.Single(projectsDocument.RootElement.GetProperty("projects").EnumerateArray());
+        var projectId = project.GetProperty("id").GetInt64();
+        Assert.Equal(sourceDirectory, project.GetProperty("sourceDirectory").GetString());
+        Assert.Equal(2, project.GetProperty("photoCount").GetInt32());
+
+        var openOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["open", projectId.ToString(), "--json"], openOutput, TextWriter.Null));
+        using var openDocument = JsonDocument.Parse(openOutput.ToString());
+        var openedProject = openDocument.RootElement.GetProperty("project");
+        Assert.Equal(projectId, openedProject.GetProperty("id").GetInt64());
+        Assert.Equal(sourceDirectory, openedProject.GetProperty("sourceDirectory").GetString());
+        Assert.Equal(2, openedProject.GetProperty("photos").GetArrayLength());
+
+        var photosOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["photos", "list", "--project", projectId.ToString(), "--json"], photosOutput, TextWriter.Null));
+        using var photosDocument = JsonDocument.Parse(photosOutput.ToString());
+        var photos = photosDocument.RootElement.GetProperty("photos").EnumerateArray().ToList();
+        Assert.Equal(2, photos.Count);
+        Assert.Equal("IMG_0001", photos[0].GetProperty("baseName").GetString());
+        Assert.Equal("IMG_0002", photos[1].GetProperty("baseName").GetString());
+    }
+
+    [Fact]
+    public void Import_creates_shared_catalog_database_with_jpg_and_raw_files()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
         var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
         Directory.CreateDirectory(sourceDirectory);
         var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
@@ -20,12 +66,15 @@ public sealed class CliSmokeTests
 
         var output = new StringWriter();
         var error = new StringWriter();
-        var exitCode = CliApp.Run(new[] { "scan", sourceDirectory }, output, error);
+        var exitCode = CliApp.Run(new[] { "import", sourceDirectory }, output, error);
 
-        var databasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
+        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
+        var sidecarDatabasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(databasePath));
+        Assert.False(File.Exists(sidecarDatabasePath));
         Assert.Contains(databasePath, output.ToString());
+        Assert.Contains("Imported 1 photo(s)", output.ToString());
         Assert.Equal(string.Empty, error.ToString());
 
         using var database = ProjectDatabase.Open(databasePath);
@@ -38,57 +87,7 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public void List_json_emits_parseable_projects_and_photos()
-    {
-        using var tempDirectory = new TempDirectory();
-        var sourceDirectory = CreateScannedSource(tempDirectory.Path);
-        var databasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
-
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var exitCode = CliApp.Run(new[] { "list", databasePath, "--json" }, output, error);
-
-        Assert.Equal(0, exitCode);
-        Assert.Equal(string.Empty, error.ToString());
-        using var document = JsonDocument.Parse(output.ToString());
-        var project = Assert.Single(document.RootElement.GetProperty("projects").EnumerateArray());
-        Assert.Equal(sourceDirectory, project.GetProperty("sourceDirectory").GetString());
-        var photos = project.GetProperty("photos").EnumerateArray().ToList();
-        Assert.Equal(2, photos.Count);
-        Assert.Equal("IMG_0001", photos[0].GetProperty("baseName").GetString());
-        Assert.Equal(Path.Combine(sourceDirectory, "IMG_0001.JPG"), photos[0].GetProperty("jpegPath").GetString());
-        Assert.Equal(Path.Combine(sourceDirectory, "IMG_0001.CR3"), photos[0].GetProperty("rawPath").GetString());
-        Assert.Equal("IMG_0002", photos[1].GetProperty("baseName").GetString());
-        Assert.Equal(Path.Combine(sourceDirectory, "IMG_0002.JPG"), photos[1].GetProperty("jpegPath").GetString());
-        Assert.True(photos[1].GetProperty("rawPath").ValueKind is JsonValueKind.Null);
-    }
-
-    [Fact]
-    public void Export_copies_all_scanned_photo_files_for_mvp_keep_category()
-    {
-        using var tempDirectory = new TempDirectory();
-        var sourceDirectory = CreateScannedSource(tempDirectory.Path);
-        var databasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
-        var exportRoot = Path.Combine(tempDirectory.Path, "exports");
-
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var exitCode = CliApp.Run(
-            new[] { "export", databasePath, "--category", "keep", "--out", exportRoot },
-            output,
-            error);
-
-        Assert.Equal(0, exitCode);
-        Assert.Equal(string.Empty, error.ToString());
-        Assert.Contains("all photos", output.ToString(), StringComparison.OrdinalIgnoreCase);
-        var exportDirectory = Assert.Single(Directory.EnumerateDirectories(exportRoot));
-        Assert.True(File.Exists(Path.Combine(exportDirectory, "IMG_0001.JPG")));
-        Assert.True(File.Exists(Path.Combine(exportDirectory, "IMG_0001.CR3")));
-        Assert.True(File.Exists(Path.Combine(exportDirectory, "IMG_0002.JPG")));
-    }
-
-    [Fact]
-    public void Rate_openai_compatible_provider_succeeds_when_database_has_no_photos()
+    public void Process_openai_compatible_provider_succeeds_when_catalog_has_no_pending_jobs()
     {
         using var tempDirectory = new TempDirectory();
         using var configEnv = new ScopedEnvironment("PHOTO_SELECTOR_CONFIG_HOME", tempDirectory.Path);
@@ -111,7 +110,7 @@ public sealed class CliSmokeTests
         var output = new StringWriter();
         var error = new StringWriter();
         var exitCode = CliApp.Run(
-            new[] { "rate", databasePath, "--provider", "openai-compatible" },
+            new[] { "process" },
             output,
             error,
             TextReader.Null,
@@ -122,20 +121,13 @@ public sealed class CliSmokeTests
         Assert.Contains("Rated 0 photo(s)", output.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string CreateScannedSource(string rootDirectory)
+    private static string CreateSourceDirectory(string rootDirectory)
     {
         var sourceDirectory = Path.Combine(rootDirectory, Path.GetRandomFileName());
         Directory.CreateDirectory(sourceDirectory);
         File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.JPG"), "jpeg");
         File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.CR3"), "raw");
         File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0002.JPG"), "jpeg");
-
-        var exitCode = CliApp.Run(
-            new[] { "scan", sourceDirectory },
-            TextWriter.Null,
-            TextWriter.Null);
-        Assert.Equal(0, exitCode);
-
         return sourceDirectory;
     }
 

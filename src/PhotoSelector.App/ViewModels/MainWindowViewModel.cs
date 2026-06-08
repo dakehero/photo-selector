@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Avalonia.Media;
+using PhotoSelector.Config;
 using PhotoSelector.Core.Scanning;
 using PhotoSelector.Core.Storage;
 
@@ -197,7 +198,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         var sourceDirectory = Path.GetFullPath(directory);
         var pairs = PhotoScanner.ScanDirectory(sourceDirectory);
-        var databasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
+        var databasePath = ConfigPaths.GetDatabasePath();
 
         using var database = ProjectDatabase.Open(databasePath);
         database.Migrate();

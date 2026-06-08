@@ -1,10 +1,12 @@
+using System.Globalization;
 using System.Text.Json;
+using PhotoSelector.Agent.Workers;
+using PhotoSelector.Agent.Workflows;
 using PhotoSelector.Ai.Ratings;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Exporting;
 using PhotoSelector.Core.Projects;
-using PhotoSelector.Core.Scanning;
 using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.Cli;
@@ -47,11 +49,17 @@ public static class CliApp
             {
                 "auth" => RunAuth(args, output, error, input, secretStore),
                 "config" => RunConfig(args, output, error),
-                "scan" => RunScan(args, output, error),
-                "list" => RunList(args, output, error),
+                "import" => RunImport(args, output, error),
+                "scan" => RunScan(args, output, error, secretStore, ratingClient),
+                "status" => RunStatus(args, output, error),
+                "process" => RunProcess(args, output, error, secretStore, ratingClient),
+                "flush" => RunFlush(args, output, error, secretStore, ratingClient),
+                "reset" => RunReset(args, output, error),
+                "results" => RunResults(args, output, error),
                 "export" => RunExport(args, output, error),
-                "rate" => RunRate(args, output, error, secretStore, ratingClient),
-                "audit" => RunAudit(args, output, error),
+                "projects" => RunProjects(args, output, error),
+                "open" => RunOpen(args, output, error),
+                "photos" => RunPhotos(args, output, error),
                 _ => WriteUsage(error),
             };
         }
@@ -146,120 +154,408 @@ public static class CliApp
         return 0;
     }
 
-    private static int RunScan(string[] args, TextWriter output, TextWriter error)
+    private static int RunImport(string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length != 2)
         {
             return WriteUsage(error);
         }
 
-        var sourceDirectory = Path.GetFullPath(args[1]);
-        if (!Directory.Exists(sourceDirectory))
+        var result = ImportDirectory(args[1], error);
+        if (result is null)
         {
-            error.WriteLine($"Directory not found: {sourceDirectory}");
             return 1;
         }
 
-        var pairs = PhotoScanner.ScanDirectory(sourceDirectory);
-        var databasePath = GetProjectDatabasePath(sourceDirectory);
-        using var database = ProjectDatabase.Open(databasePath);
-        database.Migrate();
-
-        var project = database
-            .ListProjects()
-            .FirstOrDefault(project =>
-                string.Equals(project.SourceDirectory, sourceDirectory, StringComparison.OrdinalIgnoreCase));
-        var projectId = project?.Id ?? database.CreateProject(sourceDirectory);
-        database.ReplacePhotos(projectId, pairs);
-
-        output.WriteLine($"Scanned {pairs.Count} photo(s). Database: {databasePath}");
-        return 0;
-    }
-
-    private static int RunList(string[] args, TextWriter output, TextWriter error)
-    {
-        if (args.Length != 3 || args[2] != "--json")
-        {
-            return WriteUsage(error);
-        }
-
-        using var database = OpenExistingDatabase(args[1]);
-        var projects = database
-            .ListProjects()
-            .Select(project => new ProjectJson(
-                project.Id,
-                project.SourceDirectory,
-                project.CreatedAt,
-                project.LastOpenedAt,
-                database.ListPhotos(project.Id).Select(photo => ToPhotoJson(photo, database)).ToArray()))
-            .ToArray();
-
-        output.WriteLine(JsonSerializer.Serialize(new ListJson(projects), JsonOptions));
-        return 0;
-    }
-
-    private static int RunExport(string[] args, TextWriter output, TextWriter error)
-    {
-        if (args.Length != 6 ||
-            args[2] != "--category" ||
-            !string.Equals(args[3], "keep", StringComparison.OrdinalIgnoreCase) ||
-            args[4] != "--out")
-        {
-            return WriteUsage(error);
-        }
-
-        using var database = OpenExistingDatabase(args[1]);
-        var photos = database
-            .ListProjects()
-            .SelectMany(project => database.ListPhotos(project.Id))
-            .ToArray();
-
-        var result = new ExportService().Export(photos, Path.GetFullPath(args[5]), DateTimeOffset.UtcNow);
         output.WriteLine(
-            $"Exported all photos for MVP category '{args[3]}' to {result.ExportDirectory}. Files copied: {result.ExportedFiles.Count}");
+            $"Imported {result.PhotoCount} photo(s). Project: {result.ProjectId}. Catalog: {result.DatabasePath}; pending: {result.PendingRatingJobs}");
         return 0;
     }
 
-    private static int RunRate(
+    private static int RunScan(
         string[] args,
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length < 2)
+        if (args.Length != 2)
         {
             return WriteUsage(error);
         }
 
-        var force = false;
-        string? providerOverride = null;
-        for (var index = 2; index < args.Length; index++)
+        var result = ImportDirectory(args[1], error);
+        if (result is null)
         {
-            if (args[index] == "--force")
-            {
-                force = true;
-                continue;
-            }
-
-            if (args[index] == "--provider" &&
-                index + 1 < args.Length)
-            {
-                providerOverride = args[index + 1];
-                index++;
-                continue;
-            }
-
-            return WriteUsage(error);
-        }
-
-        var databasePath = Path.GetFullPath(args[1]);
-        if (!File.Exists(databasePath))
-        {
-            error.WriteLine($"Database not found: {databasePath}");
             return 1;
         }
 
+        output.WriteLine($"Scanned {result.PhotoCount} photo(s). Database: {result.DatabasePath}");
+
+        using var database = OpenCatalogDatabase();
+        return ProcessPendingJobs(database, result.ProjectId, force: false, output, error, secretStore, ratingClient);
+    }
+
+    private static ImportResult? ImportDirectory(string directory, TextWriter error, bool forceJobs = false)
+    {
+        var databasePath = ConfigPaths.GetDatabasePath();
+        using var database = OpenCatalogDatabase();
+        try
+        {
+            var result = new ImportWorkflow().ImportDirectory(database, directory, forceJobs);
+            return new ImportResult(databasePath, result.ProjectId, result.PhotoCount, result.PendingRatingJobs);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            error.WriteLine(ex.Message);
+            return null;
+        }
+    }
+
+    private static int RunStatus(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length > 2)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        PhotoProject? project = null;
+        if (args.Length == 2)
+        {
+            project = FindProject(database, args[1]);
+            if (project is null)
+            {
+                error.WriteLine($"Project not found: {args[1]}");
+                return 1;
+            }
+        }
+
+        var summary = database.GetRatingJobSummary(project?.Id);
+        var rated = project is null
+            ? database.ListProjects().SelectMany(item => database.ListPhotos(item.Id)).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0)
+            : database.ListPhotos(project.Id).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0);
+
+        output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
+        output.WriteLine($"jobs: {summary.Total}");
+        output.WriteLine($"pending: {summary.Pending}");
+        output.WriteLine($"rated: {rated}");
+        output.WriteLine($"failed: {summary.Failed}");
+        return 0;
+    }
+
+    private static int RunProcess(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        if (args.Length > 2)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        PhotoProject? project = null;
+        if (args.Length == 2)
+        {
+            project = FindProject(database, args[1]);
+            if (project is null)
+            {
+                error.WriteLine($"Project not found: {args[1]}");
+                return 1;
+            }
+        }
+
+        return ProcessPendingJobs(database, project?.Id, force: false, output, error, secretStore, ratingClient);
+    }
+
+    private static int RunFlush(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        if (args.Length is not (2 or 3))
+        {
+            return WriteUsage(error);
+        }
+
+        var runNow = false;
+        if (args.Length == 3)
+        {
+            if (args[2] != "--now")
+            {
+                return WriteUsage(error);
+            }
+
+            runNow = true;
+        }
+
+        var result = ImportDirectory(args[1], error, forceJobs: true);
+        if (result is null)
+        {
+            return 1;
+        }
+
+        output.WriteLine(
+            $"Flushed {result.PhotoCount} photo(s). Project: {result.ProjectId}. Catalog: {result.DatabasePath}; pending: {result.PendingRatingJobs}");
+
+        if (!runNow)
+        {
+            return 0;
+        }
+
+        using var database = OpenCatalogDatabase();
+        return ProcessPendingJobs(database, result.ProjectId, force: true, output, error, secretStore, ratingClient);
+    }
+
+    private static int RunReset(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length is not (3 or 4) || args[1] != "ratings")
+        {
+            return WriteUsage(error);
+        }
+
+        var includeAudit = false;
+        if (args.Length == 4)
+        {
+            if (args[3] != "--with-audit")
+            {
+                return WriteUsage(error);
+            }
+
+            includeAudit = true;
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, args[2]);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {args[2]}");
+            return 1;
+        }
+
+        var deleted = database.ResetRatings(project.Id, includeAudit);
+        var pending = database.GetRatingJobSummary(project.Id).Pending;
+        output.WriteLine(
+            $"Reset {deleted} rating(s). Project: {project.SourceDirectory}; pending: {pending}; audit: {(includeAudit ? "deleted" : "preserved")}");
+        return 0;
+    }
+
+    private static int RunResults(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length > 2)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        PhotoProject? project = null;
+        if (args.Length == 2)
+        {
+            project = FindProject(database, args[1]);
+            if (project is null)
+            {
+                error.WriteLine($"Project not found: {args[1]}");
+                return 1;
+            }
+        }
+
+        var projects = project is null ? database.ListProjects() : [project];
+        var results = projects
+            .SelectMany(item => database.ListPhotos(item.Id))
+            .Select(photo => new PhotoResult(photo, database.ListRatings(photo.Id).FirstOrDefault()))
+            .ToArray();
+        var rated = results.Where(item => item.Rating is not null).ToArray();
+        var keep = CountCategory(rated, "keep");
+        var maybe = CountCategory(rated, "maybe");
+        var reject = CountCategory(rated, "reject");
+
+        output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
+        output.WriteLine($"photos: {results.Length}");
+        output.WriteLine($"rated: {rated.Length}");
+        output.WriteLine($"unrated: {results.Length - rated.Length}");
+        output.WriteLine($"keep: {keep}");
+        output.WriteLine($"maybe: {maybe}");
+        output.WriteLine($"reject: {reject}");
+        output.WriteLine("top:");
+
+        foreach (var item in rated
+                     .OrderByDescending(item => item.Rating!.Score)
+                     .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase)
+                     .Take(5))
+        {
+            output.WriteLine(
+                $"  {item.Rating!.Score.ToString("0.0", CultureInfo.InvariantCulture)} {item.Rating.Category} {item.Photo.BaseName} - {item.Rating.Reason}");
+        }
+
+        return 0;
+    }
+
+    private static int CountCategory(IEnumerable<PhotoResult> results, string category)
+    {
+        return results.Count(item => string.Equals(item.Rating?.Category, category, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int RunExport(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 4)
+        {
+            return WriteUsage(error);
+        }
+
+        var category = args[1];
+        if (!IsRatingCategory(category))
+        {
+            error.WriteLine($"Unknown export filter: {category}");
+            return 1;
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, args[2]);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {args[2]}");
+            return 1;
+        }
+
+        var photos = database
+            .ListPhotos(project.Id)
+            .Where(photo => string.Equals(
+                database.ListRatings(photo.Id).FirstOrDefault()?.Category,
+                category,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var result = new ExportService().Export(photos, args[3], DateTimeOffset.UtcNow);
+
+        output.WriteLine(
+            $"Exported {result.ExportedFiles.Count} file(s) from {photos.Length} photo(s). Directory: {result.ExportDirectory}");
+        return 0;
+    }
+
+    private static bool IsRatingCategory(string value)
+    {
+        return string.Equals(value, "keep", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "maybe", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "reject", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ProcessPendingJobs(
+        ProjectDatabase database,
+        long? projectId,
+        bool force,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var context = CreateRatingContext(null, error, secretStore, ratingClient);
+        if (context is null)
+        {
+            return 1;
+        }
+
+        using var ownedClient = context.OwnedClient;
+        var jobs = database.ListPendingRatingJobs(projectId);
+        var result = new RatingWorker(context.Client).ProcessPending(
+            database,
+            jobs,
+            new RatingWorkerOptions(
+                context.BaseUrl,
+                context.ApiKey.Secret!,
+                context.Profile,
+                BuildRatingPrompt(context.Profile),
+                force));
+
+        foreach (var message in result.Messages)
+        {
+            output.WriteLine(message);
+        }
+
+        output.WriteLine(
+            $"Rated {result.Rated} photo(s), skipped {result.Skipped}, failed {result.Failed}. Provider: {context.Profile.Provider}; model: {context.Profile.Model}; key source: {context.ApiKey.Source}; config: {context.Store.ConfigPath}");
+        return result.Failed == 0 ? 0 : 1;
+    }
+
+    private static int RunProjects(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 3 || args[1] != "list" || args[2] != "--json")
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        var projects = database
+            .ListProjects()
+            .Select(project => new ProjectSummaryJson(
+                project.Id,
+                project.SourceDirectory,
+                project.CreatedAt,
+                project.LastOpenedAt,
+                database.ListPhotos(project.Id).Count))
+            .ToArray();
+
+        output.WriteLine(JsonSerializer.Serialize(new ProjectsJson(projects), JsonOptions));
+        return 0;
+    }
+
+    private static int RunOpen(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 3 || args[2] != "--json")
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, args[1]);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {args[1]}");
+            return 1;
+        }
+
+        output.WriteLine(JsonSerializer.Serialize(new OpenJson(ToProjectJson(project, database)), JsonOptions));
+        return 0;
+    }
+
+    private static int RunPhotos(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 5 ||
+            args[1] != "list" ||
+            args[2] != "--project" ||
+            args[4] != "--json")
+        {
+            return WriteUsage(error);
+        }
+
+        if (!long.TryParse(args[3], out var projectId) || projectId < 1)
+        {
+            error.WriteLine("project id must be a positive integer.");
+            return 1;
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = database.ListProjects().FirstOrDefault(project => project.Id == projectId);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {projectId}");
+            return 1;
+        }
+
+        var photos = database.ListPhotos(project.Id).Select(photo => ToPhotoJson(photo, database)).ToArray();
+        output.WriteLine(JsonSerializer.Serialize(new PhotosJson(project.Id, photos), JsonOptions));
+        return 0;
+    }
+
+    private static RatingContext? CreateRatingContext(
+        string? providerOverride,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
         var store = new ConfigStore();
         var config = store.Load();
         var profile = config.GetOrCreateProfile(config.ActiveProfile);
@@ -272,109 +568,23 @@ public static class CliApp
         if (!apiKey.IsAvailable || string.IsNullOrEmpty(apiKey.Secret))
         {
             error.WriteLine(apiKey.Error ?? "API key is unavailable.");
-            return 1;
+            return null;
         }
 
         if (!ProviderRatingClientFactory.IsSupported(profile.Provider))
         {
             error.WriteLine($"Unsupported provider: {profile.Provider}");
-            return 1;
+            return null;
         }
 
         if (!Uri.TryCreate(profile.BaseUrl, UriKind.Absolute, out var baseUrl))
         {
             error.WriteLine($"Invalid base_url: {profile.BaseUrl}");
-            return 1;
+            return null;
         }
 
-        using var database = OpenExistingDatabase(databasePath);
-        var photos = database
-            .ListProjects()
-            .SelectMany(project => database.ListPhotos(project.Id))
-            .ToArray();
-
-        using var ownedClient = ratingClient is null ? ProviderRatingClientFactory.Create(profile.Provider) : null;
-        var client = ratingClient ?? ownedClient!;
-        var prompt = BuildRatingPrompt(profile);
-        var rated = 0;
-        var skipped = 0;
-        var failed = 0;
-
-        foreach (var photo in photos)
-        {
-            if (!force && database.ListRatings(photo.Id).Count > 0)
-            {
-                skipped++;
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(photo.JpegPath) || !File.Exists(photo.JpegPath))
-            {
-                skipped++;
-                continue;
-            }
-
-            try
-            {
-                var result = client
-                    .RatePhotoAsync(
-                        new PhotoRatingRequest(baseUrl, apiKey.Secret, profile.Model, prompt, photo.JpegPath),
-                        CancellationToken.None)
-                    .GetAwaiter()
-                    .GetResult();
-                var rating = result.Rating;
-                if (rating is null)
-                {
-                    database.SaveRatingAuditLog(
-                        photo.Id,
-                        null,
-                        profile.Provider,
-                        profile.Model,
-                        result.Audit.Prompt,
-                        result.Audit.RequestJsonRedacted,
-                        result.Audit.RawMessageContent,
-                        result.Audit.RawResponseJson,
-                        result.Audit.HttpStatus,
-                        result.Audit.Error);
-                    failed++;
-                    error.WriteLine($"{photo.BaseName}: {result.Audit.Error ?? "AI rating response could not be parsed."}");
-                    continue;
-                }
-
-                var criteriaJson = JsonSerializer.Serialize(rating.Criteria, JsonOptions);
-                var ratingId = database.SaveRating(
-                    photo.Id,
-                    profile.Provider,
-                    profile.Model,
-                    rating.PhotoType,
-                    rating.Score,
-                    rating.Category,
-                    criteriaJson,
-                    rating.Reason);
-                database.SaveRatingAuditLog(
-                    photo.Id,
-                    ratingId,
-                    profile.Provider,
-                    profile.Model,
-                    result.Audit.Prompt,
-                    result.Audit.RequestJsonRedacted,
-                    result.Audit.RawMessageContent,
-                    result.Audit.RawResponseJson,
-                    result.Audit.HttpStatus,
-                    result.Audit.Error);
-                rated++;
-                output.WriteLine($"{photo.BaseName}: {rating.Score} {rating.Category} - {rating.Reason}");
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                error.WriteLine($"{photo.BaseName}: {ex.Message}");
-            }
-        }
-
-        output.WriteLine(
-            $"Rated {rated} photo(s), skipped {skipped}, failed {failed}. Provider: {profile.Provider}; model: {profile.Model}; key source: {apiKey.Source}; config: {store.ConfigPath}");
-        return failed == 0 ? 0 : 1;
+        var ownedClient = ratingClient is null ? ProviderRatingClientFactory.Create(profile.Provider) : null;
+        return new RatingContext(store, profile, apiKey, baseUrl, ratingClient ?? ownedClient!, ownedClient);
     }
 
     private static int RunAuth(string[] args, TextWriter output, TextWriter error, TextReader input, ISecretStore secretStore)
@@ -425,42 +635,6 @@ public static class CliApp
         return 0;
     }
 
-    private static int RunAudit(string[] args, TextWriter output, TextWriter error)
-    {
-        if (args.Length != 5 || args[2] != "--photo-id" || args[4] != "--json")
-        {
-            return WriteUsage(error);
-        }
-
-        if (!long.TryParse(args[3], out var photoId) || photoId < 1)
-        {
-            error.WriteLine("photo-id must be a positive integer.");
-            return 1;
-        }
-
-        using var database = OpenExistingDatabase(args[1]);
-        var logs = database
-            .ListRatingAuditLogs(photoId)
-            .Select(log => new AuditLogJson(
-                log.Id,
-                log.PhotoId,
-                log.RatingId,
-                log.Provider,
-                log.Model,
-                log.Prompt,
-                log.RequestJsonRedacted,
-                log.RawMessageContent,
-                log.RawResponseJson,
-                log.HttpStatus,
-                log.Error,
-                log.CreatedAt))
-            .ToArray();
-
-        output.WriteLine(JsonSerializer.Serialize(new AuditJson(logs), JsonOptions));
-        return 0;
-    }
-
-
     private static int RunAuthStatus(string[] args, TextWriter output, TextWriter error, ISecretStore secretStore)
     {
         var profileName = GetOption(args, "--profile") ?? new ConfigStore().Load().ActiveProfile;
@@ -496,15 +670,9 @@ public static class CliApp
         return 0;
     }
 
-    private static ProjectDatabase OpenExistingDatabase(string databasePath)
+    private static ProjectDatabase OpenCatalogDatabase()
     {
-        var fullPath = Path.GetFullPath(databasePath);
-        if (!File.Exists(fullPath))
-        {
-            throw new FileNotFoundException($"Database not found: {fullPath}", fullPath);
-        }
-
-        var database = ProjectDatabase.Open(fullPath);
+        var database = ProjectDatabase.Open(ConfigPaths.GetDatabasePath());
         try
         {
             database.Migrate();
@@ -518,9 +686,27 @@ public static class CliApp
         return database;
     }
 
-    private static string GetProjectDatabasePath(string sourceDirectory)
+    private static PhotoProject? FindProject(ProjectDatabase database, string projectSelector)
     {
-        return Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
+        var projects = database.ListProjects();
+        if (long.TryParse(projectSelector, out var projectId))
+        {
+            return projects.FirstOrDefault(project => project.Id == projectId);
+        }
+
+        var sourceDirectory = Path.GetFullPath(projectSelector);
+        return projects.FirstOrDefault(project =>
+            string.Equals(project.SourceDirectory, sourceDirectory, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static ProjectJson ToProjectJson(PhotoProject project, ProjectDatabase database)
+    {
+        return new ProjectJson(
+            project.Id,
+            project.SourceDirectory,
+            project.CreatedAt,
+            project.LastOpenedAt,
+            database.ListPhotos(project.Id).Select(photo => ToPhotoJson(photo, database)).ToArray());
     }
 
     private static PhotoJson ToPhotoJson(PhotoItem photo, ProjectDatabase database)
@@ -568,11 +754,17 @@ public static class CliApp
         error.WriteLine("  photo-selector auth logout --profile default");
         error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|prompt|output_language|concurrency> <value>");
         error.WriteLine("  photo-selector config list");
+        error.WriteLine("  photo-selector import <directory>");
         error.WriteLine("  photo-selector scan <directory>");
-        error.WriteLine("  photo-selector list <project-db> --json");
-        error.WriteLine("  photo-selector export <project-db> --category keep --out <directory>");
-        error.WriteLine("  photo-selector rate <project-db> [--provider openai-compatible] [--force]");
-        error.WriteLine("  photo-selector audit <project-db> --photo-id <id> --json");
+        error.WriteLine("  photo-selector status [directory]");
+        error.WriteLine("  photo-selector process [directory]");
+        error.WriteLine("  photo-selector flush <directory> [--now]");
+        error.WriteLine("  photo-selector reset ratings <directory> [--with-audit]");
+        error.WriteLine("  photo-selector results [directory]");
+        error.WriteLine("  photo-selector export <keep|maybe|reject> <directory> <target>");
+        error.WriteLine("  photo-selector projects list --json");
+        error.WriteLine("  photo-selector open <project-id|directory> --json");
+        error.WriteLine("  photo-selector photos list --project <project-id> --json");
         return 1;
     }
 
@@ -589,23 +781,30 @@ public static class CliApp
         return null;
     }
 
-    private sealed record ListJson(ProjectJson[] Projects);
+    private sealed record ProjectsJson(ProjectSummaryJson[] Projects);
 
-    private sealed record AuditJson(AuditLogJson[] Logs);
+    private sealed record OpenJson(ProjectJson Project);
 
-    private sealed record AuditLogJson(
+    private sealed record PhotosJson(long ProjectId, PhotoJson[] Photos);
+
+    private sealed record ImportResult(string DatabasePath, long ProjectId, int PhotoCount, int PendingRatingJobs);
+
+    private sealed record PhotoResult(PhotoItem Photo, PhotoRating? Rating);
+
+    private sealed record RatingContext(
+        ConfigStore Store,
+        AiProfile Profile,
+        ApiKeyResolution ApiKey,
+        Uri BaseUrl,
+        IPhotoRatingClient Client,
+        IPhotoRatingClient? OwnedClient);
+
+    private sealed record ProjectSummaryJson(
         long Id,
-        long PhotoId,
-        long? RatingId,
-        string Provider,
-        string Model,
-        string Prompt,
-        string RequestJsonRedacted,
-        string RawMessageContent,
-        string RawResponseJson,
-        int? HttpStatus,
-        string? Error,
-        DateTimeOffset CreatedAt);
+        string SourceDirectory,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset LastOpenedAt,
+        int PhotoCount);
 
     private sealed record ProjectJson(
         long Id,

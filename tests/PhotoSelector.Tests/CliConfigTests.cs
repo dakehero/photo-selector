@@ -1,6 +1,5 @@
 using PhotoSelector.Cli;
 using PhotoSelector.Config.Secrets;
-using PhotoSelector.Core.Storage;
 
 namespace PhotoSelector.Tests;
 
@@ -35,15 +34,9 @@ public sealed class CliConfigTests
     }
 
     [Fact]
-    public void Auth_login_stores_secret_reference_shared_by_status_and_rate()
+    public void Auth_login_stores_secret_reference_shared_by_status_and_process()
     {
         using var tempDirectory = new TempDirectory();
-        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
-        using (var database = ProjectDatabase.Open(databasePath))
-        {
-            database.Migrate();
-        }
-
         var secretStore = new MemorySecretStore();
 
         using var env = new ScopedEnvironment("PHOTO_SELECTOR_CONFIG_HOME", tempDirectory.Path);
@@ -76,21 +69,21 @@ public sealed class CliConfigTests
         Assert.Contains("secret_store: memory", statusOutput.ToString());
         Assert.Equal(string.Empty, statusError.ToString());
 
-        var rateOutput = new StringWriter();
-        var rateError = new StringWriter();
-        var rateExitCode = CliApp.Run(
-            ["rate", databasePath],
-            rateOutput,
-            rateError,
+        var processOutput = new StringWriter();
+        var processError = new StringWriter();
+        var processExitCode = CliApp.Run(
+            ["process"],
+            processOutput,
+            processError,
             TextReader.Null,
             secretStore);
 
-        Assert.Equal(0, rateExitCode);
-        Assert.Contains("Rated 0 photo(s)", rateOutput.ToString());
-        Assert.Contains("openai-compatible", rateOutput.ToString());
-        Assert.Contains("gpt-4.1-mini", rateOutput.ToString());
-        Assert.Contains("api_key_ref", rateOutput.ToString());
-        Assert.Equal(string.Empty, rateError.ToString());
+        Assert.Equal(0, processExitCode);
+        Assert.Contains("Rated 0 photo(s)", processOutput.ToString());
+        Assert.Contains("openai-compatible", processOutput.ToString());
+        Assert.Contains("gpt-4.1-mini", processOutput.ToString());
+        Assert.Contains("api_key_ref", processOutput.ToString());
+        Assert.Equal(string.Empty, processError.ToString());
     }
 
     private sealed class ScopedEnvironment : IDisposable

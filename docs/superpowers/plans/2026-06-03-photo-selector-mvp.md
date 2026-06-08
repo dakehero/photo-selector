@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the first working native-feeling photo selector MVP with JPG+RAW pairing, SQLite project state, non-destructive export, CLI commands, and an Avalonia workbench shell.
+**Goal:** Build the first working native-feeling photo selector MVP with JPG+RAW pairing, a shared SQLite catalog, queued AI rating jobs, catalog-first CLI commands, non-destructive export, and an Avalonia workbench shell.
 
-**Architecture:** Use a .NET solution with focused projects: core domain logic, AI integration, CLI, Avalonia UI, and tests. Core behavior is implemented test-first and reused by CLI and GUI.
+**Architecture:** Use a .NET solution with focused projects: core storage/domain logic, AI integration, shared agent/workflow orchestration, CLI, Avalonia UI, shared config/credentials, and tests. Core behavior is implemented test-first and reused by CLI and GUI.
 
-**Tech Stack:** .NET 8 or newer, Avalonia, Microsoft.Data.Sqlite, xUnit, System.CommandLine or Cocona after confirming availability.
+**Tech Stack:** .NET 10 currently, Avalonia, Microsoft.Data.Sqlite, xUnit, OpenAI .NET SDK for OpenAI where practical, and simple hand-rolled CLI parsing until a command framework is clearly worth adding.
+
+**2026-06-09 revision:** This plan has been corrected to match the current product design. Do not implement old database-path CLI commands. User-facing CLI commands must be catalog-first and should not expose SQLite paths.
 
 ---
 
@@ -14,8 +16,10 @@
 
 - `PhotoSelector.sln`: solution root.
 - `src/PhotoSelector.Core/`: domain models, scanner, pairing, SQLite repository, export service.
-- `src/PhotoSelector.Ai/`: OpenAI-compatible scoring models and parser; real HTTP client can follow after core MVP.
-- `src/PhotoSelector.Cli/`: `scan`, `list`, `export`, and placeholder `rate` commands.
+- `src/PhotoSelector.Ai/`: provider clients, scoring models, prompt contract, parser, and audit payload helpers.
+- `src/PhotoSelector.Config/`: shared config paths, provider profiles, and credential resolution.
+- `src/PhotoSelector.Agent/`: import workflow, queued rating jobs, and worker orchestration shared by CLI/GUI/future agents.
+- `src/PhotoSelector.Cli/`: catalog-first commands: `import`, `scan`, `status`, `process`, `flush`, `reset ratings`, `results`, `export`, `projects`, `open`, and `photos`.
 - `src/PhotoSelector.App/`: Avalonia app matching the approved workbench prototype.
 - `tests/PhotoSelector.Tests/`: xUnit tests for core and CLI-critical behavior.
 - `prototypes/photo-selector-workbench.html`: already created visual reference for the desktop workbench.
@@ -28,6 +32,8 @@
 - Create: `PhotoSelector.sln`
 - Create: `src/PhotoSelector.Core/PhotoSelector.Core.csproj`
 - Create: `src/PhotoSelector.Ai/PhotoSelector.Ai.csproj`
+- Create: `src/PhotoSelector.Config/PhotoSelector.Config.csproj`
+- Create: `src/PhotoSelector.Agent/PhotoSelector.Agent.csproj`
 - Create: `src/PhotoSelector.Cli/PhotoSelector.Cli.csproj`
 - Create: `src/PhotoSelector.App/PhotoSelector.App.csproj`
 - Create: `tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj`
@@ -40,17 +46,21 @@ Run:
 dotnet new sln -n PhotoSelector
 dotnet new classlib -n PhotoSelector.Core -o src/PhotoSelector.Core
 dotnet new classlib -n PhotoSelector.Ai -o src/PhotoSelector.Ai
+dotnet new classlib -n PhotoSelector.Config -o src/PhotoSelector.Config
+dotnet new classlib -n PhotoSelector.Agent -o src/PhotoSelector.Agent
 dotnet new console -n PhotoSelector.Cli -o src/PhotoSelector.Cli
 dotnet new avalonia.app -n PhotoSelector.App -o src/PhotoSelector.App
 dotnet new xunit -n PhotoSelector.Tests -o tests/PhotoSelector.Tests
 dotnet sln add src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet sln add src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
+dotnet sln add src/PhotoSelector.Config/PhotoSelector.Config.csproj
+dotnet sln add src/PhotoSelector.Agent/PhotoSelector.Agent.csproj
 dotnet sln add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj
 dotnet sln add src/PhotoSelector.App/PhotoSelector.App.csproj
 dotnet sln add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj
 ```
 
-Expected: solution contains all five projects.
+Expected: solution contains Core, AI, Config, Agent, CLI, App, and Tests projects.
 
 - [ ] **Step 2: Add references and packages**
 
@@ -58,12 +68,20 @@ Run:
 
 ```powershell
 dotnet add src/PhotoSelector.Ai/PhotoSelector.Ai.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
+dotnet add src/PhotoSelector.Agent/PhotoSelector.Agent.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
+dotnet add src/PhotoSelector.Agent/PhotoSelector.Agent.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
+dotnet add src/PhotoSelector.Agent/PhotoSelector.Agent.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
+dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Agent/PhotoSelector.Agent.csproj
 dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
+dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
 dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
+dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
 dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
+dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Agent/PhotoSelector.Agent.csproj
+dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
 dotnet add src/PhotoSelector.Core/PhotoSelector.Core.csproj package Microsoft.Data.Sqlite
 ```
 
@@ -386,7 +404,7 @@ git commit -m "feat: add non destructive export"
 
 - [ ] **Step 1: Write failing tests**
 
-Test valid JSON parses into score/category/reason and invalid score/category returns a validation failure.
+Test valid JSON parses into `photo_type`, one-decimal `score`, `category`, `criteria`, and `reason`. Invalid score format, out-of-range scores, invalid criteria scores, or invalid category returns a validation failure.
 
 - [ ] **Step 2: Verify tests fail**
 
@@ -403,10 +421,10 @@ Expected: FAIL because parser does not exist.
 Implement a parser that accepts:
 
 ```json
-{"score":4,"category":"keep","reason":"sharp subject"}
+{"photo_type":"street","score":8.4,"category":"keep","criteria":[{"name":"impact","score":8.5,"comment":"strong moment"}],"reason":"sharp subject"}
 ```
 
-and validates score is 1 through 5 and category is `keep`, `maybe`, or `reject`.
+and validates score is `1.0` through `10.0` with exactly one decimal place, each criterion score follows the same rule, and category is `keep`, `maybe`, or `reject`.
 
 - [ ] **Step 4: Verify tests pass**
 
@@ -427,15 +445,32 @@ git commit -m "feat: parse ai rating results"
 
 ---
 
-### Task 6: CLI Scan, List, Export
+### Task 6: Catalog-First CLI And Rating Jobs
 
 **Files:**
 - Modify: `src/PhotoSelector.Cli/Program.cs`
+- Modify: `src/PhotoSelector.Core/Storage/ProjectDatabase.cs`
+- Create: `src/PhotoSelector.Core/Projects/RatingJob.cs`
+- Create: `src/PhotoSelector.Core/Projects/RatingJobSummary.cs`
+- Create: `src/PhotoSelector.Agent/Workflows/ImportWorkflow.cs`
+- Create: `src/PhotoSelector.Agent/Workers/RatingWorker.cs`
 - Create: `tests/PhotoSelector.Tests/CliSmokeTests.cs`
+- Create/modify: `tests/PhotoSelector.Tests/CliRateTests.cs`
 
 - [ ] **Step 1: Write failing smoke tests**
 
-Test the CLI can scan a temp folder, list JSON, and export files by invoking the built executable or calling command handlers directly.
+Test the CLI can:
+
+- `import <directory>` into the shared catalog and enqueue pending rating jobs.
+- `scan <directory>` synchronously import and rate pending jobs.
+- `status [directory]` report pending/rated/failed counts.
+- `process [directory]` process existing pending jobs without rescanning files.
+- `flush <directory>` rescan and requeue without deleting ratings.
+- `flush <directory> --now` rescan, requeue, and process immediately.
+- `reset ratings <directory>` delete ratings, preserve audit logs, and requeue work.
+- `results [directory]` summarize rating coverage, keep/maybe/reject counts, and top candidates.
+- `export <keep|maybe|reject> <directory> <target>` copy matching JPG+RAW pairs without requiring SQLite paths.
+- `projects list --json`, `open <project-id|directory> --json`, and `photos list --project <id> --json` emit parseable JSON.
 
 - [ ] **Step 2: Verify tests fail**
 
@@ -452,13 +487,34 @@ Expected: FAIL because CLI commands are not implemented.
 Implement commands:
 
 ```powershell
+photo-selector import <directory>
 photo-selector scan <directory>
-photo-selector list <project-db> --json
-photo-selector export <project-db> --category keep --out <directory>
-photo-selector rate <project-db> --provider openai-compatible
+photo-selector status [directory]
+photo-selector process [directory]
+photo-selector flush <directory> [--now]
+photo-selector reset ratings <directory> [--with-audit]
+photo-selector results [directory]
+photo-selector export <keep|maybe|reject> <directory> <target>
+photo-selector projects list --json
+photo-selector open <project-id|directory> --json
+photo-selector photos list --project <project-id> --json
 ```
 
-For the MVP, `rate` can print a clear message that API scoring will be wired after UI/core flow, but the command shape must exist.
+Do not implement `rate <project-db>`, `list <project-db>`, `export <project-db>`, `audit <project-db>`, or `quick-select`. The product has not shipped; there is no compatibility requirement.
+
+`import` should create/update the shared catalog and enqueue rating jobs without waiting for AI.
+
+`scan` should create/update the shared catalog and synchronously process rating jobs for that directory before returning.
+
+`process` should process existing pending jobs and must not rescan files.
+
+`flush` should rescan files and requeue jobs without deleting ratings by default.
+
+`reset ratings` should delete rating outputs and preserve audit logs unless `--with-audit` is supplied.
+
+`results` should summarize rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
+
+`export` should copy JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
 - [ ] **Step 4: Verify tests pass**
 
@@ -533,7 +589,7 @@ Use Avalonia storage picker to choose a directory, scan it with `PhotoScanner.Sc
 
 - [ ] **Step 2: Persist scanned project**
 
-Create or update a SQLite database in the selected directory as `.photo-selector/photo-selector.db`.
+Create or update the shared catalog at `ConfigPaths.GetDatabasePath()`. Do not create the default SQLite database in the selected photo directory. GUI scan/import behavior should call shared workflow code instead of duplicating CLI logic.
 
 - [ ] **Step 3: Verify manually**
 
@@ -556,7 +612,7 @@ git commit -m "feat: wire app scan workflow"
 
 ## Self-Review Checklist
 
-- Spec coverage: scanning, JPG+RAW pairing, SQLite, non-destructive export, CLI, Avalonia workbench, and AI JSON parsing are covered.
-- Known gap: real OpenAI-compatible HTTP calls are intentionally after MVP shell and parser because they need API settings UI and live network verification.
+- Spec coverage: scanning, JPG+RAW pairing, shared SQLite catalog, rating jobs, Agent workflows, CLI, Avalonia workbench, AI providers, and AI JSON parsing are covered.
+- Known gaps for the next work cycle are tracked in `TODO.md`: catalog-first `audit`, clearer `status`, worker lease/running state, retry policy, and installed CLI command path.
 - Placeholder scan: no `TBD` or unspecified implementation placeholders are intended.
-- Type consistency: `PhotoPair`, `PhotoItem`, `ProjectDatabase`, `ExportService`, and `AiRatingParser` names are used consistently across tasks.
+- Type consistency: `PhotoPair`, `PhotoItem`, `ProjectDatabase`, `RatingJob`, `ImportWorkflow`, `RatingWorker`, `ExportService`, and `AiRatingParser` names are used consistently across tasks.

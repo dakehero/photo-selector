@@ -27,4 +27,9 @@ public static class ConfigPaths
     {
         return Path.Combine(GetConfigDirectory(), "config.toml");
     }
+
+    public static string GetDatabasePath()
+    {
+        return Path.Combine(GetConfigDirectory(), "photo-selector.db");
+    }
 }

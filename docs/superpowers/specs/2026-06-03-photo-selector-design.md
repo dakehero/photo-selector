@@ -6,17 +6,16 @@ Build a cross-platform, native-feeling desktop app for quickly selecting photos 
 
 ## Product Scope
 
-The first version is a desktop GUI-first application with a small CLI for batch and AI-agent workflows. It is not a web app and should avoid web-shell frameworks such as Electron, Tauri, or Wails for the main UI.
+The first version is a local catalog-first application with a CLI that must be genuinely usable before the GUI is polished. The GUI remains important, but it is a replaceable shell over the shared engine. It is not a web app and should avoid web-shell frameworks for the primary UI unless the product direction is explicitly changed.
 
 The minimum useful workflow is:
 
-1. Open a photo directory.
-2. Scan supported image files.
-3. Pair JPG files with matching RAW files.
-4. Show JPG previews in a fast selection interface.
-5. Run AI scoring and classification.
-6. Let the user confirm keep, maybe, reject, and star ratings.
-7. Export selected JPG+RAW pairs to a target directory by copying files.
+1. Import or scan a photo directory into the shared catalog.
+2. Pair JPG files with matching RAW files.
+3. Queue or synchronously run AI scoring and classification.
+4. Query status and results from CLI, GUI, or future agent surfaces.
+5. Let the user confirm keep, maybe, reject, and star ratings.
+6. Export selected JPG+RAW pairs to a target directory by copying files.
 
 The app must not move, delete, rename, or overwrite files in the original source directory.
 
@@ -26,13 +25,15 @@ Use an Avalonia and .NET solution.
 
 Projects:
 
-- `PhotoSelector.Core`: scanning, file type detection, JPG+RAW pairing, database models, export logic, and shared domain services.
-- `PhotoSelector.Ai`: OpenAI-compatible API client, scoring prompt handling, structured AI result parsing, and an external-agent command interface reserved behind a small adapter.
+- `PhotoSelector.Core`: scanning, file type detection, JPG+RAW pairing, database models, rating job records, export logic, and storage primitives.
+- `PhotoSelector.Ai`: provider clients, scoring prompt handling, structured AI result parsing, raw audit capture, and provider factories.
+- `PhotoSelector.Config`: shared config paths, provider profiles, and secret-store integration.
+- `PhotoSelector.Agent`: import workflows, queued rating jobs, and worker orchestration shared by CLI, GUI, and future MCP/agent surfaces.
 - `PhotoSelector.App`: Avalonia desktop GUI.
-- `PhotoSelector.Cli`: command-line interface that reuses the core and AI layers.
+- `PhotoSelector.Cli`: command-line interface that reuses the Agent/Core/AI/Config layers.
 - `PhotoSelector.Tests`: focused tests for core behavior and CLI-critical flows.
 
-Use SQLite as the local project database through `Microsoft.Data.Sqlite` and a small repository layer. Avoid a full ORM in the first version. Schema changes are handled by a `schema_version` table and idempotent migration scripts in the core project.
+Use SQLite as the shared local catalog at `ConfigPaths.GetDatabasePath()`, currently `~/.photo-selector/photo-selector.db` unless `PHOTO_SELECTOR_CONFIG_HOME` overrides it. Do not put the default SQLite database inside the photo directory. Avoid a full ORM in the first version. Schema changes are handled by a `schema_version` table and idempotent migrations in the core project.
 
 Use JSON as an interchange format for CLI output, AI-agent integration, and optional result export.
 
@@ -54,20 +55,22 @@ If a JPG or RAW file has no matching companion, the scanner still imports it as 
 
 ## Local Data Model
 
-SQLite stores the app state for a project.
+SQLite stores the shared catalog state.
 
 Tables:
 
 - `projects`: project id, source directory, created time, last opened time.
 - `photos`: photo id, project id, base name, jpg path, raw path, capture time, import status.
-- `ratings`: photo id, provider, model, score, category, reason, raw response JSON, created time.
+- `ratings`: photo id, provider, model, photo type, score, category, criteria JSON, reason, created time.
+- `rating_audit_logs`: photo id, rating id, provider, model, prompt, redacted request JSON, raw model message, raw provider response, HTTP status, error, created time.
+- `rating_jobs`: project id, photo id, status, attempts, last error, created time, updated time.
 - `user_marks`: photo id, decision, stars, note, updated time.
 - `exports`: export id, project id, target directory, filter, exported count, created time.
 - `export_items`: export id, photo id, exported jpg path, exported raw path.
 
 AI categories are `keep`, `maybe`, and `reject`.
 
-Scores are integers from 1 to 5.
+Scores are decimal values from `1.0` to `10.0` with exactly one decimal place. Each criterion score follows the same format.
 
 User decisions are `unreviewed`, `keep`, `maybe`, and `reject`.
 
@@ -80,7 +83,7 @@ Layout:
 - Left sidebar: current project directory, scan summary, filters, AI status.
 - Main area: thumbnail grid using JPG previews where available.
 - Right panel: selected photo details, JPG/RAW pair status, AI score, AI reason, user decision, stars, and notes.
-- Top toolbar: open directory, scan, start AI scoring, export selected, settings.
+- Top toolbar: open/import directory, scan synchronously, show processing status, export selected, settings.
 
 Expected shortcuts:
 
@@ -95,13 +98,15 @@ The UI should prioritize repeated photo selection work: stable grid layout, clea
 
 ## AI Scoring
 
-The first version supports an OpenAI-compatible API provider.
+The first version supports OpenAI-compatible providers and provider-specific adapters where useful. Supported provider names currently include `openai`, `openrouter`, `openai-compatible`, `lmstudio`, and `ollama`.
 
 Config:
 
 - `base_url`
-- `api_key`
 - `model`
+- `api_key_ref` for system secret stores
+- `api_key_env` for CLI/CI environments
+- output language
 - scoring prompt
 - maximum concurrent requests
 - request timeout
@@ -110,38 +115,57 @@ The app sends a resized JPG preview to the model. RAW files are not uploaded for
 
 ```json
 {
-  "score": 4,
+  "photo_type": "street",
+  "score": 8.4,
   "category": "keep",
+  "criteria": [
+    { "name": "impact", "score": 8.5, "comment": "strong moment" }
+  ],
   "reason": "sharp subject, good expression, clean composition"
 }
 ```
 
-The parser validates score range and category values. Invalid or partial results are stored as failed ratings with enough detail for retry and debugging.
+The parser validates one-decimal score format, score range, criteria score range, and category values. Invalid or partial results are stored in audit logs and failed jobs with enough detail for retry and debugging.
 
 An external agent command adapter is reserved for a later step. Its interface should accept a photo path and JSON context and return the same structured JSON shape on stdout.
 
-AI provider settings are stored globally in the user's app settings. Each rating row stores the provider, model, prompt version, and raw response snapshot used for that rating so project history remains understandable after settings change.
+AI provider settings are stored globally in the user's app settings. Secrets are not stored in config, database, or logs. Each rating and audit row stores enough non-secret provider/model/prompt/response detail so project history remains understandable after settings change.
 
 ## CLI
 
-The CLI exists for batch use and for AI agents to call.
+The CLI exists for batch use and for AI agents to call. It must not expose SQLite database paths in normal user-facing commands.
 
 Commands:
 
 ```bash
+photo-selector import <directory>
 photo-selector scan <directory>
-photo-selector rate <project-db> --provider openai-compatible
-photo-selector export <project-db> --category keep --out <directory>
-photo-selector list <project-db> --json
+photo-selector status [directory]
+photo-selector process [directory]
+photo-selector flush <directory> [--now]
+photo-selector reset ratings <directory> [--with-audit]
+photo-selector results [directory]
+photo-selector export <keep|maybe|reject> <directory> <target>
+photo-selector projects list --json
+photo-selector open <project-id|directory> --json
+photo-selector photos list --project <project-id> --json
 ```
 
-`scan` creates or updates a SQLite database for the directory.
+`import` is the indexing/background-friendly entry point. It creates or updates a project, indexes JPG+RAW pairs, and enqueues pending rating jobs without requiring AI results before returning.
 
-`rate` runs AI scoring for unrated or failed photos.
+`scan` is the synchronous fast path. It imports or updates the directory, processes pending rating jobs for that directory, and returns a result summary before exiting.
 
-`export` copies selected JPG+RAW pairs to the target directory.
+`process` handles existing pending jobs without rescanning files.
 
-`list --json` emits project and photo state as structured JSON.
+`flush` refreshes file input by rescanning a directory, updating the index, and requeueing work. `flush --now` then processes the directory immediately.
+
+`reset ratings` removes AI rating outputs for a directory and requeues work. It preserves audit logs by default; `--with-audit` deletes audit logs too.
+
+`results` summarizes rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
+
+`export` copies JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
+
+`projects`, `open`, and `photos` expose catalog state for humans, scripts, and future agent surfaces.
 
 ## Export Behavior
 
@@ -163,9 +187,9 @@ Scanning:
 
 AI scoring:
 
-- A failed request marks only that photo as failed.
-- Failed photos can be retried.
-- Raw response or error details are stored in the database.
+- A failed request marks only that rating job as failed.
+- Failed jobs can be retried by future retry/process commands.
+- Raw response or error details are stored in audit logs with secrets and image data redacted.
 
 Export:
 
@@ -186,9 +210,12 @@ Core tests:
 
 CLI tests:
 
-- `scan` creates a project database.
-- `list --json` emits parseable JSON.
-- `export` copies expected files from a sample project.
+- `import` creates or updates a shared catalog project and enqueues rating jobs.
+- `scan` imports and synchronously processes rating jobs.
+- `status`, `process`, `flush`, and `reset ratings` follow the catalog-first semantics.
+- `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
+- `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs without requiring SQLite paths.
+- `projects/open/photos --json` emit parseable JSON without requiring SQLite paths.
 
 GUI tests:
 

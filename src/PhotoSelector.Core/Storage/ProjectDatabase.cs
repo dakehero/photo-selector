@@ -80,6 +80,19 @@ public sealed class ProjectDatabase : IDisposable
                 FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS rating_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                photo_id INTEGER NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS rating_audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 photo_id INTEGER NOT NULL,
@@ -167,45 +180,102 @@ public sealed class ProjectDatabase : IDisposable
 
     public void ReplacePhotos(long projectId, IEnumerable<PhotoPair> pairs)
     {
+        var pairList = pairs.ToArray();
         using var transaction = connection.BeginTransaction();
 
-        using (var deleteCommand = connection.CreateCommand())
+        var importedBaseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in pairList)
         {
-            deleteCommand.Transaction = transaction;
-            deleteCommand.CommandText = "DELETE FROM photos WHERE project_id = $project_id;";
-            deleteCommand.Parameters.AddWithValue("$project_id", projectId);
-            deleteCommand.ExecuteNonQuery();
+            importedBaseNames.Add(pair.BaseName);
+            using var existingCommand = connection.CreateCommand();
+            existingCommand.Transaction = transaction;
+            existingCommand.CommandText = """
+                SELECT id
+                FROM photos
+                WHERE project_id = $project_id
+                  AND base_name = $base_name COLLATE NOCASE
+                ORDER BY id
+                LIMIT 1;
+                """;
+            existingCommand.Parameters.AddWithValue("$project_id", projectId);
+            existingCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
+            var existingId = existingCommand.ExecuteScalar();
+
+            if (existingId is null)
+            {
+                using var insertCommand = connection.CreateCommand();
+                insertCommand.Transaction = transaction;
+                insertCommand.CommandText = """
+                    INSERT INTO photos (
+                        project_id,
+                        base_name,
+                        jpeg_path,
+                        raw_path,
+                        capture_time,
+                        import_status
+                    )
+                    VALUES (
+                        $project_id,
+                        $base_name,
+                        $jpeg_path,
+                        $raw_path,
+                        $capture_time,
+                        $import_status
+                    );
+                    """;
+                insertCommand.Parameters.AddWithValue("$project_id", projectId);
+                insertCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
+                insertCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$capture_time", DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$import_status", "imported");
+                insertCommand.ExecuteNonQuery();
+                continue;
+            }
+
+            using var updateCommand = connection.CreateCommand();
+            updateCommand.Transaction = transaction;
+            updateCommand.CommandText = """
+                UPDATE photos
+                SET base_name = $base_name,
+                    jpeg_path = $jpeg_path,
+                    raw_path = $raw_path,
+                    import_status = $import_status
+                WHERE id = $id;
+                """;
+            updateCommand.Parameters.AddWithValue("$id", (long)existingId);
+            updateCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
+            updateCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$import_status", "imported");
+            updateCommand.ExecuteNonQuery();
         }
 
-        foreach (var pair in pairs)
+        using (var staleCommand = connection.CreateCommand())
         {
-            using var insertCommand = connection.CreateCommand();
-            insertCommand.Transaction = transaction;
-            insertCommand.CommandText = """
-                INSERT INTO photos (
-                    project_id,
-                    base_name,
-                    jpeg_path,
-                    raw_path,
-                    capture_time,
-                    import_status
-                )
-                VALUES (
-                    $project_id,
-                    $base_name,
-                    $jpeg_path,
-                    $raw_path,
-                    $capture_time,
-                    $import_status
-                );
-                """;
-            insertCommand.Parameters.AddWithValue("$project_id", projectId);
-            insertCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
-            insertCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
-            insertCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
-            insertCommand.Parameters.AddWithValue("$capture_time", DBNull.Value);
-            insertCommand.Parameters.AddWithValue("$import_status", "imported");
-            insertCommand.ExecuteNonQuery();
+            staleCommand.Transaction = transaction;
+            staleCommand.CommandText = "SELECT id, base_name FROM photos WHERE project_id = $project_id;";
+            staleCommand.Parameters.AddWithValue("$project_id", projectId);
+            var stalePhotoIds = new List<long>();
+            using (var reader = staleCommand.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    if (!importedBaseNames.Contains(reader.GetString(1)))
+                    {
+                        stalePhotoIds.Add(reader.GetInt64(0));
+                    }
+                }
+            }
+
+            foreach (var stalePhotoId in stalePhotoIds)
+            {
+                using var deleteCommand = connection.CreateCommand();
+                deleteCommand.Transaction = transaction;
+                deleteCommand.CommandText = "DELETE FROM photos WHERE id = $id;";
+                deleteCommand.Parameters.AddWithValue("$id", stalePhotoId);
+                deleteCommand.ExecuteNonQuery();
+            }
         }
 
         transaction.Commit();
@@ -260,6 +330,176 @@ public sealed class ProjectDatabase : IDisposable
         }
 
         return photos;
+    }
+
+    public PhotoItem? GetPhoto(long photoId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, project_id, base_name, jpeg_path, raw_path, capture_time, import_status
+            FROM photos
+            WHERE id = $photo_id;
+            """;
+        command.Parameters.AddWithValue("$photo_id", photoId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new PhotoItem(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : ParseTimestamp(reader.GetString(5)),
+            reader.GetString(6));
+    }
+
+    public int EnqueueRatingJobs(long projectId, bool force = false)
+    {
+        var now = FormatTimestamp(DateTimeOffset.UtcNow);
+        var enqueued = 0;
+        foreach (var photo in ListPhotos(projectId))
+        {
+            if (string.IsNullOrWhiteSpace(photo.JpegPath))
+            {
+                continue;
+            }
+
+            if (!force && ListRatings(photo.Id).Count > 0)
+            {
+                continue;
+            }
+
+            using var command = connection.CreateCommand();
+            command.CommandText = force
+                ? """
+                    INSERT INTO rating_jobs (project_id, photo_id, status, attempts, last_error, created_at, updated_at)
+                    VALUES ($project_id, $photo_id, 'pending', 0, NULL, $created_at, $updated_at)
+                    ON CONFLICT(photo_id) DO UPDATE SET
+                        status = 'pending',
+                        attempts = 0,
+                        last_error = NULL,
+                        updated_at = $updated_at;
+                    """
+                : """
+                    INSERT INTO rating_jobs (project_id, photo_id, status, attempts, last_error, created_at, updated_at)
+                    VALUES ($project_id, $photo_id, 'pending', 0, NULL, $created_at, $updated_at)
+                    ON CONFLICT(photo_id) DO NOTHING;
+                    """;
+            command.Parameters.AddWithValue("$project_id", projectId);
+            command.Parameters.AddWithValue("$photo_id", photo.Id);
+            command.Parameters.AddWithValue("$created_at", now);
+            command.Parameters.AddWithValue("$updated_at", now);
+            if (command.ExecuteNonQuery() > 0)
+            {
+                enqueued++;
+            }
+        }
+
+        return enqueued;
+    }
+
+    public IReadOnlyList<RatingJob> ListRatingJobs(long? projectId = null)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = projectId is null
+            ? """
+                SELECT id, project_id, photo_id, status, attempts, last_error, created_at, updated_at
+                FROM rating_jobs
+                ORDER BY id;
+                """
+            : """
+                SELECT id, project_id, photo_id, status, attempts, last_error, created_at, updated_at
+                FROM rating_jobs
+                WHERE project_id = $project_id
+                ORDER BY id;
+                """;
+        if (projectId is not null)
+        {
+            command.Parameters.AddWithValue("$project_id", projectId.Value);
+        }
+
+        var jobs = new List<RatingJob>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            jobs.Add(ReadRatingJob(reader));
+        }
+
+        return jobs;
+    }
+
+    public IReadOnlyList<RatingJob> ListPendingRatingJobs(long? projectId = null)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = projectId is null
+            ? """
+                SELECT id, project_id, photo_id, status, attempts, last_error, created_at, updated_at
+                FROM rating_jobs
+                WHERE status = 'pending'
+                ORDER BY id;
+                """
+            : """
+                SELECT id, project_id, photo_id, status, attempts, last_error, created_at, updated_at
+                FROM rating_jobs
+                WHERE status = 'pending' AND project_id = $project_id
+                ORDER BY id;
+                """;
+        if (projectId is not null)
+        {
+            command.Parameters.AddWithValue("$project_id", projectId.Value);
+        }
+
+        var jobs = new List<RatingJob>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            jobs.Add(ReadRatingJob(reader));
+        }
+
+        return jobs;
+    }
+
+    public RatingJobSummary GetRatingJobSummary(long? projectId = null)
+    {
+        var jobs = ListRatingJobs(projectId);
+        return new RatingJobSummary(
+            jobs.Count,
+            jobs.Count(job => job.Status == "pending"),
+            jobs.Count(job => job.Status == "completed"),
+            jobs.Count(job => job.Status == "failed"));
+    }
+
+    public void MarkRatingJobCompleted(long jobId)
+    {
+        UpdateRatingJob(jobId, "completed", null);
+    }
+
+    public void MarkRatingJobFailed(long jobId, string error)
+    {
+        UpdateRatingJob(jobId, "failed", error);
+    }
+
+    private void UpdateRatingJob(long jobId, string status, string? error)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE rating_jobs
+            SET status = $status,
+                attempts = attempts + 1,
+                last_error = $last_error,
+                updated_at = $updated_at
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", jobId);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$last_error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$updated_at", FormatTimestamp(DateTimeOffset.UtcNow));
+        command.ExecuteNonQuery();
     }
 
     public long SaveRating(
@@ -444,9 +684,51 @@ public sealed class ProjectDatabase : IDisposable
         return logs;
     }
 
+    public int ResetRatings(long projectId, bool includeAudit = false)
+    {
+        var photoIds = ListPhotos(projectId).Select(photo => photo.Id).ToArray();
+        var deleted = 0;
+        using var transaction = connection.BeginTransaction();
+
+        foreach (var photoId in photoIds)
+        {
+            if (includeAudit)
+            {
+                using var deleteAuditCommand = connection.CreateCommand();
+                deleteAuditCommand.Transaction = transaction;
+                deleteAuditCommand.CommandText = "DELETE FROM rating_audit_logs WHERE photo_id = $photo_id;";
+                deleteAuditCommand.Parameters.AddWithValue("$photo_id", photoId);
+                deleteAuditCommand.ExecuteNonQuery();
+            }
+
+            using var deleteRatingCommand = connection.CreateCommand();
+            deleteRatingCommand.Transaction = transaction;
+            deleteRatingCommand.CommandText = "DELETE FROM ratings WHERE photo_id = $photo_id;";
+            deleteRatingCommand.Parameters.AddWithValue("$photo_id", photoId);
+            deleted += deleteRatingCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        EnqueueRatingJobs(projectId, force: true);
+        return deleted;
+    }
+
     public void Dispose()
     {
         connection.Dispose();
+    }
+
+    private static RatingJob ReadRatingJob(SqliteDataReader reader)
+    {
+        return new RatingJob(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetString(3),
+            reader.GetInt32(4),
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            ParseTimestamp(reader.GetString(6)),
+            ParseTimestamp(reader.GetString(7)));
     }
 
     private static string FormatTimestamp(DateTimeOffset value)
