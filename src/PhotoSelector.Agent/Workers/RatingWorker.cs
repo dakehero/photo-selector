@@ -14,18 +14,24 @@ public sealed class RatingWorker(IPhotoRatingClient client)
         ProjectDatabase database,
         IEnumerable<RatingJob> jobs,
         RatingWorkerOptions options,
+        Action<RatingWorkerProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
         var messages = new List<string>();
         var rated = 0;
         var skipped = 0;
         var failed = 0;
+        var jobList = jobs.ToArray();
+        var total = jobList.Length;
+        var current = 0;
 
-        foreach (var job in jobs)
+        foreach (var job in jobList)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            current++;
 
             var photo = database.GetPhoto(job.PhotoId);
+            progress?.Invoke(new RatingWorkerProgress(current, total, photo?.BaseName ?? $"photo:{job.PhotoId}"));
             if (photo is null)
             {
                 skipped++;
@@ -130,3 +136,7 @@ public sealed record RatingWorkerResult(
     int Failed,
     IReadOnlyList<string> Messages);
 
+public sealed record RatingWorkerProgress(
+    int Current,
+    int Total,
+    string Label);

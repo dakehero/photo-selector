@@ -281,7 +281,14 @@ public sealed class CliRateTests
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, error.ToString());
         Assert.Contains("Scanned 1 photo(s)", output.ToString());
+        Assert.Contains("rating 1/1: IMG_0001", output.ToString());
         Assert.Contains("Rated 1 photo(s)", output.ToString());
+        Assert.Contains("Results:", output.ToString());
+        Assert.Contains("photos: 1", output.ToString());
+        Assert.Contains("maybe: 1", output.ToString());
+        Assert.Contains("7.6 maybe IMG_0001 - Useful candidate.", output.ToString());
+        Assert.Contains("all:", output.ToString());
+        Assert.Contains("  7.6 maybe IMG_0001 - Useful candidate.", output.ToString());
         Assert.Equal(jpegPath, Assert.Single(client.Requests).ImagePath);
 
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
@@ -290,6 +297,55 @@ public sealed class CliRateTests
         var project = Assert.Single(database.ListProjects());
         var photo = Assert.Single(database.ListPhotos(project.Id));
         Assert.Single(database.ListRatings(photo.Id));
+    }
+
+    [Fact]
+    public void Scan_retries_failed_jobs_and_outputs_full_results()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+            database.EnqueueRatingJobs(projectId);
+            var job = Assert.Single(database.ListPendingRatingJobs(projectId));
+            database.MarkRatingJobFailed(job.Id, "temporary failure");
+        }
+
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                8.4,
+                "keep",
+                [new AiRatingCriterion("impact", 8.2, "Strong moment.")],
+                "Strong keeper."));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(
+            ["scan", sourceDirectory],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        var text = output.ToString();
+        Assert.Contains("rating 1/1: IMG_0001", text);
+        Assert.Contains("Rated 1 photo(s)", text);
+        Assert.Contains("failed: 0", text);
+        Assert.Contains("all:", text);
+        Assert.Contains("  8.4 keep IMG_0001 - Strong keeper.", text);
     }
 
     [Fact]
@@ -404,6 +460,114 @@ public sealed class CliRateTests
         using var rerated = ProjectDatabase.Open(databasePath);
         rerated.Migrate();
         Assert.Equal(2, rerated.ListRatings(photoId).Count);
+    }
+
+    [Fact]
+    public void Process_model_option_overrides_config_without_saving_it()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+            database.EnqueueRatingJobs(projectId);
+        }
+
+        Assert.Equal(0, CliApp.Run(["config", "set", "model", "configured-model"], TextWriter.Null, TextWriter.Null));
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate."));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(
+            ["process", sourceDirectory, "--model", "override-model"],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Equal("override-model", Assert.Single(client.Requests).Model);
+        Assert.Contains("model: override-model", output.ToString());
+
+        var configOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["config", "list"], configOutput, TextWriter.Null));
+        Assert.Contains("model: configured-model", configOutput.ToString());
+    }
+
+    [Fact]
+    public void Arena_rates_limited_photos_with_multiple_models_without_saving_primary_ratings()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        Assert.Equal(0, CliApp.Run(["config", "set", "provider", "openrouter"], TextWriter.Null, TextWriter.Null));
+        var secretStore = Login(new MemorySecretStore());
+        var client = new ModelSwitchingRatingClient(new Dictionary<string, AiRating>
+        {
+            ["model-a"] = new(
+                "landscape",
+                8.2,
+                "keep",
+                [new AiRatingCriterion("impact", 8.0, "Strong.")],
+                "Strong keeper."),
+            ["model-b"] = new(
+                "landscape",
+                5.4,
+                "maybe",
+                [new AiRatingCriterion("impact", 5.0, "Flat.")],
+                "Flat alternate."),
+        });
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(
+            ["arena", sourceDirectory, "--models", "model-a,model-b", "--limit", "1"],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        var text = output.ToString();
+        Assert.Contains("Arena:", text);
+        Assert.Contains("1 photo(s) x 2 model(s)", text);
+        Assert.Contains("model-a", text);
+        Assert.Contains("avg: 8.2", text);
+        Assert.Contains("model-b", text);
+        Assert.Contains("avg: 5.4", text);
+        Assert.Contains("largest disagreements:", text);
+        Assert.Contains("IMG_0001", text);
+        Assert.Equal(["model-a", "model-b"], client.Requests.Select(request => request.Model).ToArray());
+
+        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        database.Migrate();
+        var project = Assert.Single(database.ListProjects());
+        var photo = Assert.Single(database.ListPhotos(project.Id));
+        Assert.Empty(database.ListRatings(photo.Id));
+        var run = Assert.Single(database.ListArenaRuns(project.Id));
+        Assert.Equal(2, database.ListArenaRatings(run.Id).Count);
     }
 
     [Fact]
@@ -529,6 +693,30 @@ public sealed class CliRateTests
                     """{"model":"gpt-4.1-mini","image_url":"[redacted-data-url]"}""",
                     """{"photo_type":"portrait","score":7.3}""",
                     """{"choices":[{"message":{"content":"{\"photo_type\":\"portrait\",\"score\":7.3}"}}]}""",
+                    200,
+                    null)));
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ModelSwitchingRatingClient(IReadOnlyDictionary<string, AiRating> ratingsByModel) : IPhotoRatingClient
+    {
+        public List<PhotoRatingRequest> Requests { get; } = [];
+
+        public Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            var rating = ratingsByModel[request.Model];
+            return Task.FromResult(new AiRatingClientResult(
+                rating,
+                new AiRatingAudit(
+                    request.Prompt,
+                    """{"image_url":"[redacted-data-url]"}""",
+                    $$"""{"photo_type":"{{rating.PhotoType}}","score":{{rating.Score}}}""",
+                    """{"choices":[{"message":{"content":"{}"}}]}""",
                     200,
                     null)));
         }

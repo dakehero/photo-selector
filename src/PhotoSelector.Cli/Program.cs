@@ -8,6 +8,7 @@ using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Exporting;
 using PhotoSelector.Core.Projects;
 using PhotoSelector.Core.Storage;
+using Spectre.Console;
 
 namespace PhotoSelector.Cli;
 
@@ -50,6 +51,7 @@ public static class CliApp
                 "auth" => RunAuth(args, output, error, input, secretStore),
                 "config" => RunConfig(args, output, error),
                 "import" => RunImport(args, output, error),
+                "arena" => RunArena(args, output, error, secretStore, ratingClient),
                 "scan" => RunScan(args, output, error, secretStore, ratingClient),
                 "status" => RunStatus(args, output, error),
                 "process" => RunProcess(args, output, error, secretStore, ratingClient),
@@ -179,9 +181,20 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length != 2)
+        if (args.Length is not (2 or 4))
         {
             return WriteUsage(error);
+        }
+
+        var modelOverride = default(string?);
+        if (args.Length == 4)
+        {
+            if (args[2] != "--model" || string.IsNullOrWhiteSpace(args[3]))
+            {
+                return WriteUsage(error);
+            }
+
+            modelOverride = args[3];
         }
 
         var result = ImportDirectory(args[1], error);
@@ -193,7 +206,19 @@ public static class CliApp
         output.WriteLine($"Scanned {result.PhotoCount} photo(s). Database: {result.DatabasePath}");
 
         using var database = OpenCatalogDatabase();
-        return ProcessPendingJobs(database, result.ProjectId, force: false, output, error, secretStore, ratingClient);
+        var exitCode = ProcessPendingJobs(
+            database,
+            result.ProjectId,
+            force: false,
+            retryFailed: true,
+            modelOverride,
+            output,
+            error,
+            secretStore,
+            ratingClient);
+        output.WriteLine("Results:");
+        WriteResultsSummary(database, database.ListProjects().First(project => project.Id == result.ProjectId), output);
+        return exitCode;
     }
 
     private static ImportResult? ImportDirectory(string directory, TextWriter error, bool forceJobs = false)
@@ -210,6 +235,116 @@ public static class CliApp
             error.WriteLine(ex.Message);
             return null;
         }
+    }
+
+    private static int RunArena(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        if (args.Length is not (4 or 6) || args[2] != "--models")
+        {
+            return WriteUsage(error);
+        }
+
+        var models = args[3]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .ToArray();
+        if (models.Length == 0)
+        {
+            error.WriteLine("arena requires at least one model.");
+            return 1;
+        }
+
+        var limit = 8;
+        if (args.Length == 6)
+        {
+            if (args[4] != "--limit" || !int.TryParse(args[5], out limit) || limit < 1)
+            {
+                return WriteUsage(error);
+            }
+        }
+
+        var import = ImportDirectory(args[1], error);
+        if (import is null)
+        {
+            return 1;
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = database.ListProjects().First(project => project.Id == import.ProjectId);
+        var photos = database
+            .ListPhotos(project.Id)
+            .Where(photo => !string.IsNullOrWhiteSpace(photo.JpegPath) && File.Exists(photo.JpegPath))
+            .Take(limit)
+            .ToArray();
+
+        var context = CreateRatingContext(null, null, error, secretStore, ratingClient);
+        if (context is null)
+        {
+            return 1;
+        }
+
+        using var ownedClient = context.OwnedClient;
+        var prompt = BuildRatingPrompt(context.Profile);
+        var arenaRunId = database.CreateArenaRun(
+            project.Id,
+            context.Profile.Provider,
+            string.Join(",", models),
+            prompt,
+            context.Profile.OutputLanguage,
+            limit);
+
+        var messages = new List<string>();
+        foreach (var model in models)
+        {
+            foreach (var photo in photos)
+            {
+                var result = context.Client
+                    .RatePhotoAsync(
+                        new PhotoRatingRequest(
+                            context.BaseUrl,
+                            context.ApiKey.Secret!,
+                            model,
+                            prompt,
+                            photo.JpegPath!),
+                        CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                var rating = result.Rating;
+                database.SaveArenaRating(
+                    arenaRunId,
+                    photo.Id,
+                    context.Profile.Provider,
+                    model,
+                    rating?.PhotoType,
+                    rating?.Score,
+                    rating?.Category,
+                    rating is null ? "[]" : JsonSerializer.Serialize(rating.Criteria, JsonOptions),
+                    rating?.Reason ?? string.Empty,
+                    result.Audit.Prompt,
+                    result.Audit.RequestJsonRedacted,
+                    result.Audit.RawMessageContent,
+                    result.Audit.RawResponseJson,
+                    result.Audit.HttpStatus,
+                    result.Audit.Error);
+                messages.Add(rating is null
+                    ? $"{model} {photo.BaseName}: failed - {result.Audit.Error ?? "unknown error"}"
+                    : $"{model} {photo.BaseName}: {rating.Score.ToString("0.0", CultureInfo.InvariantCulture)} {rating.Category}");
+            }
+        }
+
+        output.WriteLine($"Arena: {photos.Length} photo(s) x {models.Length} model(s). Run: {arenaRunId}");
+        foreach (var message in messages)
+        {
+            output.WriteLine(message);
+        }
+
+        WriteArenaSummary(database, arenaRunId, output);
+        return 0;
     }
 
     private static int RunStatus(string[] args, TextWriter output, TextWriter error)
@@ -251,24 +386,65 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length > 2)
+        if (args.Length > 4)
         {
             return WriteUsage(error);
         }
 
+        string? projectSelector = null;
+        string? modelOverride = null;
+        if (args.Length >= 2)
+        {
+            if (args[1] == "--model")
+            {
+                if (args.Length != 3 || string.IsNullOrWhiteSpace(args[2]))
+                {
+                    return WriteUsage(error);
+                }
+
+                modelOverride = args[2];
+            }
+            else
+            {
+                projectSelector = args[1];
+                if (args.Length == 4)
+                {
+                    if (args[2] != "--model" || string.IsNullOrWhiteSpace(args[3]))
+                    {
+                        return WriteUsage(error);
+                    }
+
+                    modelOverride = args[3];
+                }
+                else if (args.Length != 2)
+                {
+                    return WriteUsage(error);
+                }
+            }
+        }
+
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (args.Length == 2)
+        if (projectSelector is not null)
         {
-            project = FindProject(database, args[1]);
+            project = FindProject(database, projectSelector);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {args[1]}");
+                error.WriteLine($"Project not found: {projectSelector}");
                 return 1;
             }
         }
 
-        return ProcessPendingJobs(database, project?.Id, force: false, output, error, secretStore, ratingClient);
+        return ProcessPendingJobs(
+            database,
+            project?.Id,
+            force: false,
+            retryFailed: false,
+            modelOverride,
+            output,
+            error,
+            secretStore,
+            ratingClient);
     }
 
     private static int RunFlush(
@@ -278,12 +454,13 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length is not (2 or 3))
+        if (args.Length is not (2 or 3 or 5))
         {
             return WriteUsage(error);
         }
 
         var runNow = false;
+        string? modelOverride = null;
         if (args.Length == 3)
         {
             if (args[2] != "--now")
@@ -292,6 +469,16 @@ public static class CliApp
             }
 
             runNow = true;
+        }
+        else if (args.Length == 5)
+        {
+            if (args[2] != "--now" || args[3] != "--model" || string.IsNullOrWhiteSpace(args[4]))
+            {
+                return WriteUsage(error);
+            }
+
+            runNow = true;
+            modelOverride = args[4];
         }
 
         var result = ImportDirectory(args[1], error, forceJobs: true);
@@ -309,7 +496,16 @@ public static class CliApp
         }
 
         using var database = OpenCatalogDatabase();
-        return ProcessPendingJobs(database, result.ProjectId, force: true, output, error, secretStore, ratingClient);
+        return ProcessPendingJobs(
+            database,
+            result.ProjectId,
+            force: true,
+            retryFailed: false,
+            modelOverride,
+            output,
+            error,
+            secretStore,
+            ratingClient);
     }
 
     private static int RunReset(string[] args, TextWriter output, TextWriter error)
@@ -364,12 +560,27 @@ public static class CliApp
             }
         }
 
+        WriteResultsSummary(database, project, output);
+        return 0;
+    }
+
+    private static void WriteResultsSummary(ProjectDatabase database, PhotoProject? project, TextWriter output)
+    {
         var projects = project is null ? database.ListProjects() : [project];
+        var jobsByPhotoId = projects
+            .SelectMany(item => database.ListRatingJobs(item.Id))
+            .GroupBy(job => job.PhotoId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(job => job.UpdatedAt).First());
         var results = projects
             .SelectMany(item => database.ListPhotos(item.Id))
-            .Select(photo => new PhotoResult(photo, database.ListRatings(photo.Id).FirstOrDefault()))
+            .Select(photo => new PhotoResult(
+                photo,
+                database.ListRatings(photo.Id).FirstOrDefault(),
+                jobsByPhotoId.GetValueOrDefault(photo.Id)))
             .ToArray();
         var rated = results.Where(item => item.Rating is not null).ToArray();
+        var failed = results.Count(item => item.Rating is null && item.Job?.Status == "failed");
+        var unrated = results.Count(item => item.Rating is null && item.Job?.Status != "failed");
         var keep = CountCategory(rated, "keep");
         var maybe = CountCategory(rated, "maybe");
         var reject = CountCategory(rated, "reject");
@@ -377,7 +588,8 @@ public static class CliApp
         output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
         output.WriteLine($"photos: {results.Length}");
         output.WriteLine($"rated: {rated.Length}");
-        output.WriteLine($"unrated: {results.Length - rated.Length}");
+        output.WriteLine($"unrated: {unrated}");
+        output.WriteLine($"failed: {failed}");
         output.WriteLine($"keep: {keep}");
         output.WriteLine($"maybe: {maybe}");
         output.WriteLine($"reject: {reject}");
@@ -392,7 +604,63 @@ public static class CliApp
                 $"  {item.Rating!.Score.ToString("0.0", CultureInfo.InvariantCulture)} {item.Rating.Category} {item.Photo.BaseName} - {item.Rating.Reason}");
         }
 
-        return 0;
+        output.WriteLine("all:");
+        foreach (var item in results
+                     .OrderByDescending(item => item.Rating?.Score ?? 0)
+                     .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase))
+        {
+            if (item.Rating is null)
+            {
+                if (item.Job?.Status == "failed")
+                {
+                    output.WriteLine($"  failed {item.Photo.BaseName} - {item.Job.LastError ?? "unknown error"}");
+                    continue;
+                }
+
+                output.WriteLine($"  unrated {item.Photo.BaseName}");
+                continue;
+            }
+
+            output.WriteLine(
+                $"  {item.Rating.Score.ToString("0.0", CultureInfo.InvariantCulture)} {item.Rating.Category} {item.Photo.BaseName} - {item.Rating.Reason}");
+        }
+    }
+
+    private static void WriteArenaSummary(ProjectDatabase database, long arenaRunId, TextWriter output)
+    {
+        var ratings = database.ListArenaRatings(arenaRunId);
+        output.WriteLine("models:");
+        foreach (var group in ratings.GroupBy(rating => rating.Model).OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var scored = group.Where(rating => rating.Score is not null).ToArray();
+            var average = scored.Length == 0 ? 0 : scored.Average(rating => rating.Score!.Value);
+            output.WriteLine(
+                $"{group.Key} avg: {average.ToString("0.0", CultureInfo.InvariantCulture)} keep: {CountArenaCategory(scored, "keep")} maybe: {CountArenaCategory(scored, "maybe")} reject: {CountArenaCategory(scored, "reject")} fail: {group.Count(rating => rating.Error is not null)}");
+        }
+
+        output.WriteLine("largest disagreements:");
+        foreach (var disagreement in ratings
+                     .Where(rating => rating.Score is not null)
+                     .GroupBy(rating => rating.PhotoId)
+                     .Select(group => new
+                     {
+                         Photo = database.GetPhoto(group.Key),
+                         Ratings = group.OrderBy(rating => rating.Model, StringComparer.OrdinalIgnoreCase).ToArray(),
+                         Spread = group.Max(rating => rating.Score!.Value) - group.Min(rating => rating.Score!.Value),
+                     })
+                     .Where(item => item.Photo is not null && item.Ratings.Length > 1)
+                     .OrderByDescending(item => item.Spread)
+                     .ThenBy(item => item.Photo!.BaseName, StringComparer.OrdinalIgnoreCase)
+                     .Take(5))
+        {
+            output.WriteLine(
+                $"{disagreement.Photo!.BaseName} {string.Join(" ", disagreement.Ratings.Select(rating => $"{rating.Model}={rating.Score!.Value.ToString("0.0", CultureInfo.InvariantCulture)}"))}");
+        }
+    }
+
+    private static int CountArenaCategory(IEnumerable<ArenaRating> ratings, string category)
+    {
+        return ratings.Count(rating => string.Equals(rating.Category, category, StringComparison.OrdinalIgnoreCase));
     }
 
     private static int CountCategory(IEnumerable<PhotoResult> results, string category)
@@ -447,28 +715,40 @@ public static class CliApp
         ProjectDatabase database,
         long? projectId,
         bool force,
+        bool retryFailed,
+        string? modelOverride,
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        var context = CreateRatingContext(null, error, secretStore, ratingClient);
+        var context = CreateRatingContext(null, modelOverride, error, secretStore, ratingClient);
         if (context is null)
         {
             return 1;
         }
 
         using var ownedClient = context.OwnedClient;
-        var jobs = database.ListPendingRatingJobs(projectId);
-        var result = new RatingWorker(context.Client).ProcessPending(
-            database,
-            jobs,
-            new RatingWorkerOptions(
-                context.BaseUrl,
-                context.ApiKey.Secret!,
-                context.Profile,
-                BuildRatingPrompt(context.Profile),
-                force));
+        var jobs = retryFailed
+            ? database
+                .ListRatingJobs(projectId)
+                .Where(job => job.Status is "pending" or "failed")
+                .ToArray()
+            : database.ListPendingRatingJobs(projectId);
+        var worker = new RatingWorker(context.Client);
+        var options = new RatingWorkerOptions(
+            context.BaseUrl,
+            context.ApiKey.Secret!,
+            context.Profile,
+            BuildRatingPrompt(context.Profile),
+            force);
+        var result = ShouldUseLiveProgress(output, jobs.Count)
+            ? ProcessPendingJobsWithLiveProgress(worker, database, jobs, options)
+            : worker.ProcessPending(
+                database,
+                jobs,
+                options,
+                progress => output.WriteLine(FormatProgressEvent(progress)));
 
         foreach (var message in result.Messages)
         {
@@ -478,6 +758,52 @@ public static class CliApp
         output.WriteLine(
             $"Rated {result.Rated} photo(s), skipped {result.Skipped}, failed {result.Failed}. Provider: {context.Profile.Provider}; model: {context.Profile.Model}; key source: {context.ApiKey.Source}; config: {context.Store.ConfigPath}");
         return result.Failed == 0 ? 0 : 1;
+    }
+
+    private static bool ShouldUseLiveProgress(TextWriter output, int jobCount)
+    {
+        return jobCount > 0 && ReferenceEquals(output, Console.Out) && !Console.IsOutputRedirected;
+    }
+
+    private static RatingWorkerResult ProcessPendingJobsWithLiveProgress(
+        RatingWorker worker,
+        ProjectDatabase database,
+        IReadOnlyList<RatingJob> jobs,
+        RatingWorkerOptions options)
+    {
+        RatingWorkerResult? result = null;
+        AnsiConsole
+            .Progress()
+            .AutoClear(false)
+            .HideCompleted(false)
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new ElapsedTimeColumn(),
+                new SpinnerColumn())
+            .Start(context =>
+            {
+                var task = context.AddTask("Rating photos", maxValue: jobs.Count);
+                result = worker.ProcessPending(
+                    database,
+                    jobs,
+                    options,
+                    progress =>
+                    {
+                        task.Description = $"Rating {progress.Current}/{progress.Total} {Markup.Escape(progress.Label)}";
+                        task.Value = progress.Current;
+                    });
+                task.Description = "Rating complete";
+                task.Value = jobs.Count;
+            });
+
+        return result ?? new RatingWorkerResult(0, 0, 0, []);
+    }
+
+    private static string FormatProgressEvent(RatingWorkerProgress progress)
+    {
+        return $"rating {progress.Current}/{progress.Total}: {progress.Label}";
     }
 
     private static int RunProjects(string[] args, TextWriter output, TextWriter error)
@@ -552,6 +878,7 @@ public static class CliApp
 
     private static RatingContext? CreateRatingContext(
         string? providerOverride,
+        string? modelOverride,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
@@ -562,6 +889,10 @@ public static class CliApp
         if (!string.IsNullOrWhiteSpace(providerOverride))
         {
             profile.Provider = providerOverride;
+        }
+        if (!string.IsNullOrWhiteSpace(modelOverride))
+        {
+            profile.Model = modelOverride;
         }
 
         var apiKey = ApiKeyResolver.Resolve(profile, secretStore);
@@ -755,10 +1086,11 @@ public static class CliApp
         error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|prompt|output_language|concurrency> <value>");
         error.WriteLine("  photo-selector config list");
         error.WriteLine("  photo-selector import <directory>");
-        error.WriteLine("  photo-selector scan <directory>");
+        error.WriteLine("  photo-selector arena <directory> --models <model1,model2> [--limit <n>]");
+        error.WriteLine("  photo-selector scan <directory> [--model <model>]");
         error.WriteLine("  photo-selector status [directory]");
-        error.WriteLine("  photo-selector process [directory]");
-        error.WriteLine("  photo-selector flush <directory> [--now]");
+        error.WriteLine("  photo-selector process [directory] [--model <model>]");
+        error.WriteLine("  photo-selector flush <directory> [--now [--model <model>]]");
         error.WriteLine("  photo-selector reset ratings <directory> [--with-audit]");
         error.WriteLine("  photo-selector results [directory]");
         error.WriteLine("  photo-selector export <keep|maybe|reject> <directory> <target>");
@@ -789,7 +1121,7 @@ public static class CliApp
 
     private sealed record ImportResult(string DatabasePath, long ProjectId, int PhotoCount, int PendingRatingJobs);
 
-    private sealed record PhotoResult(PhotoItem Photo, PhotoRating? Rating);
+    private sealed record PhotoResult(PhotoItem Photo, PhotoRating? Rating, RatingJob? Job);
 
     private sealed record RatingContext(
         ConfigStore Store,
