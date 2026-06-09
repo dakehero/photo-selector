@@ -109,6 +109,40 @@ public sealed class ProjectDatabase : IDisposable
                 FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
                 FOREIGN KEY (rating_id) REFERENCES ratings (id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS arena_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                models_csv TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                output_language TEXT NOT NULL,
+                limit_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS arena_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                arena_run_id INTEGER NOT NULL,
+                photo_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                photo_type TEXT NULL,
+                score REAL NULL,
+                category TEXT NULL,
+                criteria_json TEXT NOT NULL DEFAULT '[]',
+                reason TEXT NOT NULL DEFAULT '',
+                prompt TEXT NOT NULL,
+                request_json_redacted TEXT NOT NULL,
+                raw_message_content TEXT NOT NULL,
+                raw_response_json TEXT NOT NULL,
+                http_status INTEGER NULL,
+                error TEXT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (arena_run_id) REFERENCES arena_runs (id) ON DELETE CASCADE,
+                FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
+            );
             """;
         command.ExecuteNonQuery();
         AddColumnIfMissing("ratings", "photo_type", "TEXT NOT NULL DEFAULT 'unknown'");
@@ -682,6 +716,217 @@ public sealed class ProjectDatabase : IDisposable
         }
 
         return logs;
+    }
+
+    public long CreateArenaRun(
+        long projectId,
+        string provider,
+        string modelsCsv,
+        string prompt,
+        string outputLanguage,
+        int limit)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO arena_runs (
+                project_id,
+                provider,
+                models_csv,
+                prompt,
+                output_language,
+                limit_count,
+                created_at
+            )
+            VALUES (
+                $project_id,
+                $provider,
+                $models_csv,
+                $prompt,
+                $output_language,
+                $limit_count,
+                $created_at
+            );
+
+            SELECT last_insert_rowid();
+            """;
+        command.Parameters.AddWithValue("$project_id", projectId);
+        command.Parameters.AddWithValue("$provider", provider);
+        command.Parameters.AddWithValue("$models_csv", modelsCsv);
+        command.Parameters.AddWithValue("$prompt", prompt);
+        command.Parameters.AddWithValue("$output_language", outputLanguage);
+        command.Parameters.AddWithValue("$limit_count", limit);
+        command.Parameters.AddWithValue("$created_at", FormatTimestamp(DateTimeOffset.UtcNow));
+        return (long)command.ExecuteScalar()!;
+    }
+
+    public long SaveArenaRating(
+        long arenaRunId,
+        long photoId,
+        string provider,
+        string model,
+        string? photoType,
+        double? score,
+        string? category,
+        string criteriaJson,
+        string reason,
+        string prompt,
+        string requestJsonRedacted,
+        string rawMessageContent,
+        string rawResponseJson,
+        int? httpStatus,
+        string? error)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO arena_ratings (
+                arena_run_id,
+                photo_id,
+                provider,
+                model,
+                photo_type,
+                score,
+                category,
+                criteria_json,
+                reason,
+                prompt,
+                request_json_redacted,
+                raw_message_content,
+                raw_response_json,
+                http_status,
+                error,
+                created_at
+            )
+            VALUES (
+                $arena_run_id,
+                $photo_id,
+                $provider,
+                $model,
+                $photo_type,
+                $score,
+                $category,
+                $criteria_json,
+                $reason,
+                $prompt,
+                $request_json_redacted,
+                $raw_message_content,
+                $raw_response_json,
+                $http_status,
+                $error,
+                $created_at
+            );
+
+            SELECT last_insert_rowid();
+            """;
+        command.Parameters.AddWithValue("$arena_run_id", arenaRunId);
+        command.Parameters.AddWithValue("$photo_id", photoId);
+        command.Parameters.AddWithValue("$provider", provider);
+        command.Parameters.AddWithValue("$model", model);
+        command.Parameters.AddWithValue("$photo_type", (object?)photoType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$score", (object?)score ?? DBNull.Value);
+        command.Parameters.AddWithValue("$category", (object?)category ?? DBNull.Value);
+        command.Parameters.AddWithValue("$criteria_json", criteriaJson);
+        command.Parameters.AddWithValue("$reason", reason);
+        command.Parameters.AddWithValue("$prompt", prompt);
+        command.Parameters.AddWithValue("$request_json_redacted", requestJsonRedacted);
+        command.Parameters.AddWithValue("$raw_message_content", rawMessageContent);
+        command.Parameters.AddWithValue("$raw_response_json", rawResponseJson);
+        command.Parameters.AddWithValue("$http_status", (object?)httpStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("$error", (object?)error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$created_at", FormatTimestamp(DateTimeOffset.UtcNow));
+        return (long)command.ExecuteScalar()!;
+    }
+
+    public IReadOnlyList<ArenaRun> ListArenaRuns(long? projectId = null)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = projectId is null
+            ? """
+                SELECT id, project_id, provider, models_csv, prompt, output_language, limit_count, created_at
+                FROM arena_runs
+                ORDER BY id;
+                """
+            : """
+                SELECT id, project_id, provider, models_csv, prompt, output_language, limit_count, created_at
+                FROM arena_runs
+                WHERE project_id = $project_id
+                ORDER BY id;
+                """;
+        if (projectId is not null)
+        {
+            command.Parameters.AddWithValue("$project_id", projectId.Value);
+        }
+
+        var runs = new List<ArenaRun>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            runs.Add(new ArenaRun(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetInt32(6),
+                ParseTimestamp(reader.GetString(7))));
+        }
+
+        return runs;
+    }
+
+    public IReadOnlyList<ArenaRating> ListArenaRatings(long arenaRunId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                id,
+                arena_run_id,
+                photo_id,
+                provider,
+                model,
+                photo_type,
+                score,
+                category,
+                criteria_json,
+                reason,
+                prompt,
+                request_json_redacted,
+                raw_message_content,
+                raw_response_json,
+                http_status,
+                error,
+                created_at
+            FROM arena_ratings
+            WHERE arena_run_id = $arena_run_id
+            ORDER BY id;
+            """;
+        command.Parameters.AddWithValue("$arena_run_id", arenaRunId);
+
+        var ratings = new List<ArenaRating>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            ratings.Add(new ArenaRating(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetDouble(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetString(11),
+                reader.GetString(12),
+                reader.GetString(13),
+                reader.IsDBNull(14) ? null : reader.GetInt32(14),
+                reader.IsDBNull(15) ? null : reader.GetString(15),
+                ParseTimestamp(reader.GetString(16))));
+        }
+
+        return ratings;
     }
 
     public int ResetRatings(long projectId, bool includeAudit = false)
