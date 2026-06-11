@@ -17,25 +17,49 @@ public sealed class RatingWorker(IPhotoRatingClient client)
         Action<RatingWorkerProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        return ProcessPendingAsync(database, jobs, options, progress, cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private async Task<RatingWorkerResult> ProcessPendingAsync(
+        ProjectDatabase database,
+        IEnumerable<RatingJob> jobs,
+        RatingWorkerOptions options,
+        Action<RatingWorkerProgress>? progress,
+        CancellationToken cancellationToken)
+    {
         var messages = new List<string>();
         var rated = 0;
         var skipped = 0;
         var failed = 0;
         var jobList = jobs.ToArray();
         var total = jobList.Length;
-        var current = 0;
+        var completed = 0;
+        var workItems = new List<RatingWorkItem>();
+        var databaseLock = new object();
+        var progressLock = new object();
 
-        foreach (var job in jobList)
+        void ReportProgress(string label)
         {
+            var current = Interlocked.Increment(ref completed);
+            lock (progressLock)
+            {
+                progress?.Invoke(new RatingWorkerProgress(current, total, label));
+            }
+        }
+
+        for (var index = 0; index < jobList.Length; index++)
+        {
+            var job = jobList[index];
             cancellationToken.ThrowIfCancellationRequested();
-            current++;
 
             var photo = database.GetPhoto(job.PhotoId);
-            progress?.Invoke(new RatingWorkerProgress(current, total, photo?.BaseName ?? $"photo:{job.PhotoId}"));
             if (photo is null)
             {
                 skipped++;
                 database.MarkRatingJobFailed(job.Id, "Photo not found.");
+                ReportProgress($"photo:{job.PhotoId}");
                 continue;
             }
 
@@ -45,6 +69,7 @@ public sealed class RatingWorker(IPhotoRatingClient client)
             {
                 skipped++;
                 database.MarkRatingJobCompleted(job.Id);
+                ReportProgress(photo.BaseName);
                 continue;
             }
 
@@ -52,28 +77,64 @@ public sealed class RatingWorker(IPhotoRatingClient client)
             {
                 skipped++;
                 database.MarkRatingJobFailed(job.Id, "JPEG file not found.");
+                ReportProgress(photo.BaseName);
                 continue;
             }
 
+            workItems.Add(new RatingWorkItem(index, job, photo));
+        }
+
+        using var gate = new SemaphoreSlim(Math.Max(1, options.Concurrency));
+        var orderedMessages = new string?[jobList.Length];
+        var tasks = workItems.Select(async item =>
+        {
+            await gate.WaitAsync(cancellationToken);
             try
             {
-                var result = client
-                    .RatePhotoAsync(
+                var result = await client.RatePhotoAsync(
                         new PhotoRatingRequest(
                             options.BaseUrl,
                             options.ApiKey,
                             options.Profile.Model,
                             options.Prompt,
-                            photo.JpegPath),
-                        cancellationToken)
-                    .GetAwaiter()
-                    .GetResult();
+                            item.Photo.JpegPath!),
+                        cancellationToken);
                 var rating = result.Rating;
-                if (rating is null)
+
+                lock (databaseLock)
                 {
+                    if (rating is null)
+                    {
+                        database.SaveRatingAuditLog(
+                            item.Photo.Id,
+                            null,
+                            options.Profile.Provider,
+                            options.Profile.Model,
+                            result.Audit.Prompt,
+                            result.Audit.RequestJsonRedacted,
+                            result.Audit.RawMessageContent,
+                            result.Audit.RawResponseJson,
+                            result.Audit.HttpStatus,
+                            result.Audit.Error);
+                        failed++;
+                        database.MarkRatingJobFailed(item.Job.Id, result.Audit.Error ?? "AI rating response could not be parsed.");
+                        orderedMessages[item.Index] = $"{item.Photo.BaseName}: {result.Audit.Error ?? "AI rating response could not be parsed."}";
+                        return;
+                    }
+
+                    var criteriaJson = JsonSerializer.Serialize(rating.Criteria, JsonOptions);
+                    var ratingId = database.SaveRating(
+                        item.Photo.Id,
+                        options.Profile.Provider,
+                        options.Profile.Model,
+                        rating.PhotoType,
+                        rating.Score,
+                        rating.Category,
+                        criteriaJson,
+                        rating.Reason);
                     database.SaveRatingAuditLog(
-                        photo.Id,
-                        null,
+                        item.Photo.Id,
+                        ratingId,
                         options.Profile.Provider,
                         options.Profile.Model,
                         result.Audit.Prompt,
@@ -82,47 +143,34 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                         result.Audit.RawResponseJson,
                         result.Audit.HttpStatus,
                         result.Audit.Error);
-                    failed++;
-                    database.MarkRatingJobFailed(job.Id, result.Audit.Error ?? "AI rating response could not be parsed.");
-                    messages.Add($"{photo.BaseName}: {result.Audit.Error ?? "AI rating response could not be parsed."}");
-                    continue;
+                    database.MarkRatingJobCompleted(item.Job.Id);
+                    rated++;
+                    orderedMessages[item.Index] = $"{item.Photo.BaseName}: {rating.Score} {rating.Category} - {rating.Reason}";
                 }
-
-                var criteriaJson = JsonSerializer.Serialize(rating.Criteria, JsonOptions);
-                var ratingId = database.SaveRating(
-                    photo.Id,
-                    options.Profile.Provider,
-                    options.Profile.Model,
-                    rating.PhotoType,
-                    rating.Score,
-                    rating.Category,
-                    criteriaJson,
-                    rating.Reason);
-                database.SaveRatingAuditLog(
-                    photo.Id,
-                    ratingId,
-                    options.Profile.Provider,
-                    options.Profile.Model,
-                    result.Audit.Prompt,
-                    result.Audit.RequestJsonRedacted,
-                    result.Audit.RawMessageContent,
-                    result.Audit.RawResponseJson,
-                    result.Audit.HttpStatus,
-                    result.Audit.Error);
-                database.MarkRatingJobCompleted(job.Id);
-                rated++;
-                messages.Add($"{photo.BaseName}: {rating.Score} {rating.Category} - {rating.Reason}");
             }
             catch (Exception ex)
             {
-                failed++;
-                database.MarkRatingJobFailed(job.Id, ex.Message);
-                messages.Add($"{photo.BaseName}: {ex.Message}");
+                lock (databaseLock)
+                {
+                    failed++;
+                    database.MarkRatingJobFailed(item.Job.Id, ex.Message);
+                    orderedMessages[item.Index] = $"{item.Photo.BaseName}: {ex.Message}";
+                }
             }
-        }
+            finally
+            {
+                gate.Release();
+                ReportProgress(item.Photo.BaseName);
+            }
+        }).ToArray();
+
+        await Task.WhenAll(tasks);
+        messages.AddRange(orderedMessages.Where(message => message is not null)!);
 
         return new RatingWorkerResult(rated, skipped, failed, messages);
     }
+
+    private sealed record RatingWorkItem(int Index, RatingJob Job, PhotoItem Photo);
 }
 
 public sealed record RatingWorkerOptions(
@@ -130,7 +178,8 @@ public sealed record RatingWorkerOptions(
     string ApiKey,
     AiProfile Profile,
     string Prompt,
-    bool Force);
+    bool Force,
+    int Concurrency = 1);
 
 public sealed record RatingWorkerResult(
     int Rated,

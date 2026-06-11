@@ -1095,7 +1095,8 @@ public static class CliApp
             context.ApiKey.Secret!,
             context.Profile,
             BuildRatingPrompt(context.Profile),
-            force);
+            force,
+            context.Profile.Concurrency);
         var result = progressOutput is not null && ShouldUseLiveProgress(progressOutput, jobs.Count)
             ? ProcessPendingJobsWithLiveProgress(worker, database, jobs, options)
             : worker.ProcessPending(

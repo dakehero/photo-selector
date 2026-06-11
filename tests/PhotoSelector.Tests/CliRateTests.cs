@@ -635,6 +635,40 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Process_uses_configured_concurrency_for_ai_requests()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0001.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0002.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0003.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        Assert.Equal(0, CliApp.Run(["config", "set", "concurrency", "2"], TextWriter.Null, TextWriter.Null));
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["import", sourceDirectory], TextWriter.Null, TextWriter.Null));
+
+        var client = new DelayedRatingClient(
+            new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate."));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["process", sourceDirectory], output, error, TextReader.Null, secretStore, client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Equal(3, client.RequestCount);
+        Assert.Equal(2, client.MaxInFlight);
+        Assert.Contains("Rated 3 photo(s)", output.ToString());
+    }
+
+    [Fact]
     public void Arena_rates_limited_photos_with_multiple_models_without_saving_primary_ratings()
     {
         using var tempDirectory = new TempDirectory();
@@ -873,6 +907,54 @@ public sealed class CliRateTests
         public Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
         {
             return Task.FromResult(result);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class DelayedRatingClient(AiRating rating) : IPhotoRatingClient
+    {
+        private int inFlight;
+        private int maxInFlight;
+        private int requestCount;
+
+        public int MaxInFlight => maxInFlight;
+
+        public int RequestCount => requestCount;
+
+        public async Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref requestCount);
+            var current = Interlocked.Increment(ref inFlight);
+            while (true)
+            {
+                var observed = maxInFlight;
+                if (current <= observed ||
+                    Interlocked.CompareExchange(ref maxInFlight, current, observed) == observed)
+                {
+                    break;
+                }
+            }
+
+            try
+            {
+                await Task.Delay(100, cancellationToken);
+                return new AiRatingClientResult(
+                    rating,
+                    new AiRatingAudit(
+                        request.Prompt,
+                        """{"image_url":"[redacted-data-url]"}""",
+                        $$"""{"photo_type":"{{rating.PhotoType}}","score":{{rating.Score}}}""",
+                        """{"choices":[{"message":{"content":"{}"}}]}""",
+                        200,
+                        null));
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
         }
 
         public void Dispose()
