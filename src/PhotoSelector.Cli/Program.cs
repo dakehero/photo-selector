@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PhotoSelector.Agent.Workers;
 using PhotoSelector.Agent.Workflows;
 using PhotoSelector.Ai.Ratings;
@@ -12,7 +13,7 @@ using Spectre.Console;
 
 namespace PhotoSelector.Cli;
 
-public static class Program
+public static partial class Program
 {
     public static int Main(string[] args)
     {
@@ -20,10 +21,8 @@ public static class Program
     }
 }
 
-public static class CliApp
+public static partial class CliApp
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public static int Run(string[] args, TextWriter output, TextWriter error)
     {
         return Run(args, output, error, Console.In, SecretStoreFactory.CreateDefault());
@@ -236,7 +235,7 @@ public static class CliApp
                     new ScanSummaryJson(result.PhotoCount, result.PendingRatingJobs),
                     processing,
                     results),
-                JsonOptions));
+                CliJsonContext.Default.ProductDirectoryJson));
             return processing.Failed == 0 ? 0 : 1;
         }
 
@@ -300,7 +299,7 @@ public static class CliApp
         {
             output.WriteLine(JsonSerializer.Serialize(
                 new SinglePhotoProductJson(commandName, imagePath, ToProductRatingJson(result.Rating), result.Audit.Error),
-                JsonOptions));
+                CliJsonContext.Default.SinglePhotoProductJson));
         }
         else if (result.Rating is null)
         {
@@ -384,7 +383,7 @@ public static class CliApp
                     new ScanSummaryJson(result.PhotoCount, result.PendingRatingJobs),
                     processing,
                     results),
-                JsonOptions));
+                CliJsonContext.Default.ScanJson));
             return processing.Failed == 0 ? 0 : 1;
         }
 
@@ -506,7 +505,7 @@ public static class CliApp
                     rating?.PhotoType,
                     rating?.Score,
                     rating?.Category,
-                    rating is null ? "[]" : JsonSerializer.Serialize(rating.Criteria, JsonOptions),
+                    rating is null ? "[]" : JsonSerializer.Serialize(rating.Criteria.ToArray(), RatingJsonContext.Default.AiRatingCriterionArray),
                     rating?.Reason ?? string.Empty,
                     result.Audit.Prompt,
                     result.Audit.RequestJsonRedacted,
@@ -555,7 +554,7 @@ public static class CliApp
         var runs = database.ListArenaRuns(project?.Id);
         if (json)
         {
-            output.WriteLine(JsonSerializer.Serialize(BuildArenaListJson(database, project, runs), JsonOptions));
+            output.WriteLine(JsonSerializer.Serialize(BuildArenaListJson(database, project, runs), CliJsonContext.Default.ArenaListJson));
             return 0;
         }
 
@@ -593,7 +592,7 @@ public static class CliApp
         var project = database.ListProjects().FirstOrDefault(item => item.Id == run.ProjectId);
         if (json)
         {
-            output.WriteLine(JsonSerializer.Serialize(BuildArenaShowJson(database, run, project), JsonOptions));
+            output.WriteLine(JsonSerializer.Serialize(BuildArenaShowJson(database, run, project), CliJsonContext.Default.ArenaShowJson));
             return 0;
         }
 
@@ -638,7 +637,7 @@ public static class CliApp
         {
             output.WriteLine(JsonSerializer.Serialize(
                 new StatusJson(project is null ? "all" : "project", ToProjectScopeJson(project), ToJobSummaryJson(summary), rated),
-                JsonOptions));
+                CliJsonContext.Default.StatusJson));
             return 0;
         }
 
@@ -836,7 +835,7 @@ public static class CliApp
         var results = BuildResultsJson(database, project);
         if (json)
         {
-            output.WriteLine(JsonSerializer.Serialize(results, JsonOptions));
+            output.WriteLine(JsonSerializer.Serialize(results, CliJsonContext.Default.ResultsJson));
             return 0;
         }
 
@@ -1427,7 +1426,7 @@ public static class CliApp
                 database.ListPhotos(project.Id).Count))
             .ToArray();
 
-        output.WriteLine(JsonSerializer.Serialize(new ProjectsJson(projects), JsonOptions));
+        output.WriteLine(JsonSerializer.Serialize(new ProjectsJson(projects), CliJsonContext.Default.ProjectsJson));
         return 0;
     }
 
@@ -1446,7 +1445,7 @@ public static class CliApp
             return 1;
         }
 
-        output.WriteLine(JsonSerializer.Serialize(new OpenJson(ToProjectJson(project, database)), JsonOptions));
+        output.WriteLine(JsonSerializer.Serialize(new OpenJson(ToProjectJson(project, database)), CliJsonContext.Default.OpenJson));
         return 0;
     }
 
@@ -1475,7 +1474,7 @@ public static class CliApp
         }
 
         var photos = database.ListPhotos(project.Id).Select(photo => ToPhotoJson(photo, database)).ToArray();
-        output.WriteLine(JsonSerializer.Serialize(new PhotosJson(project.Id, photos), JsonOptions));
+        output.WriteLine(JsonSerializer.Serialize(new PhotosJson(project.Id, photos), CliJsonContext.Default.PhotosJson));
         return 0;
     }
 
@@ -1696,7 +1695,7 @@ public static class CliApp
     {
         try
         {
-            return JsonSerializer.Deserialize<RatingCriterionJson[]>(criteriaJson, JsonOptions) ?? [];
+            return JsonSerializer.Deserialize(criteriaJson, CliJsonContext.Default.RatingCriterionJsonArray) ?? [];
         }
         catch (JsonException)
         {
@@ -1744,6 +1743,20 @@ public static class CliApp
 
         return null;
     }
+
+    [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+    [JsonSerializable(typeof(ProjectsJson))]
+    [JsonSerializable(typeof(OpenJson))]
+    [JsonSerializable(typeof(PhotosJson))]
+    [JsonSerializable(typeof(ProductDirectoryJson))]
+    [JsonSerializable(typeof(SinglePhotoProductJson))]
+    [JsonSerializable(typeof(ScanJson))]
+    [JsonSerializable(typeof(ResultsJson))]
+    [JsonSerializable(typeof(StatusJson))]
+    [JsonSerializable(typeof(ArenaListJson))]
+    [JsonSerializable(typeof(ArenaShowJson))]
+    [JsonSerializable(typeof(RatingCriterionJson[]))]
+    private sealed partial class CliJsonContext : JsonSerializerContext;
 
     private sealed record ProjectsJson(ProjectSummaryJson[] Projects);
 

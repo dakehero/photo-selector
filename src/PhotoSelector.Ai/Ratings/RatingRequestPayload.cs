@@ -5,8 +5,6 @@ namespace PhotoSelector.Ai.Ratings;
 
 internal static class RatingRequestPayload
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public static async Task<string> CreateJpegDataUrlAsync(string imagePath, CancellationToken cancellationToken)
     {
         return await CreateJpegDataUrlAsync(imagePath, PhotoPreviewOptions.Standard, cancellationToken);
@@ -23,44 +21,31 @@ internal static class RatingRequestPayload
 
     public static string CreateChatCompletionsRequestJson(PhotoRatingRequest request, string dataUrl)
     {
-        var body = new
-        {
-            model = request.Model,
-            temperature = 0,
-            messages = new[]
-            {
-                new
-                {
-                    role = "user",
-                    content = new object[]
-                    {
-                        new { type = "text", text = request.Prompt },
-                        new { type = "image_url", image_url = new { url = dataUrl } },
-                    },
-                },
-            },
-        };
+        var body = new ChatCompletionsRequestJson(
+            request.Model,
+            0,
+            [
+                new ChatMessageJson(
+                    "user",
+                    [
+                        new ChatContentItemJson("text", Text: request.Prompt),
+                        new ChatContentItemJson("image_url", ImageUrl: new ImageUrlJson(dataUrl)),
+                    ]),
+            ]);
 
-        return JsonSerializer.Serialize(body, JsonOptions);
+        return JsonSerializer.Serialize(body, RatingJsonContext.Default.ChatCompletionsRequestJson);
     }
 
     public static string CreateRedactedRequestJson(PhotoRatingRequest request)
     {
         var preview = request.Preview ?? PhotoPreviewOptions.Standard;
-        var redacted = new
-        {
-            model = request.Model,
-            prompt = request.Prompt,
-            image_path = request.ImagePath,
-            preview = new
-            {
-                max_edge = preview.MaxEdge,
-                jpeg_quality = preview.JpegQuality,
-                image_url = "[redacted-data-url]",
-            },
-        };
+        var redacted = new RedactedRatingRequestJson(
+            request.Model,
+            request.Prompt,
+            request.ImagePath,
+            new RedactedPreviewJson(preview.MaxEdge, preview.JpegQuality, "[redacted-data-url]"));
 
-        return JsonSerializer.Serialize(redacted, JsonOptions);
+        return JsonSerializer.Serialize(redacted, RatingJsonContext.Default.RedactedRatingRequestJson);
     }
 
     private static async Task<byte[]> CreateJpegPreviewAsync(string imagePath, CancellationToken cancellationToken)

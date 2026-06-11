@@ -8,8 +8,6 @@ namespace PhotoSelector.Agent.Workers;
 
 public sealed class RatingWorker(IPhotoRatingClient client)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public RatingWorkerResult ProcessPending(
         ProjectDatabase database,
         IEnumerable<RatingJob> jobs,
@@ -123,7 +121,7 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                         return;
                     }
 
-                    var criteriaJson = JsonSerializer.Serialize(rating.Criteria, JsonOptions);
+                    var criteriaJson = JsonSerializer.Serialize(rating.Criteria.ToArray(), RatingJsonContext.Default.AiRatingCriterionArray);
                     var ratingId = database.SaveRating(
                         item.Photo.Id,
                         options.Profile.Provider,
