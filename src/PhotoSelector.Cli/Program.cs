@@ -181,20 +181,29 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length is not (2 or 4))
+        if (args.Length < 2)
         {
             return WriteUsage(error);
         }
 
+        var json = false;
         var modelOverride = default(string?);
-        if (args.Length == 4)
+        for (var index = 2; index < args.Length; index++)
         {
-            if (args[2] != "--model" || string.IsNullOrWhiteSpace(args[3]))
+            if (args[index] == "--json")
             {
-                return WriteUsage(error);
+                json = true;
+                continue;
             }
 
-            modelOverride = args[3];
+            if (args[index] == "--model" && index + 1 < args.Length && !string.IsNullOrWhiteSpace(args[index + 1]))
+            {
+                modelOverride = args[index + 1];
+                index++;
+                continue;
+            }
+
+            return WriteUsage(error);
         }
 
         var result = ImportDirectory(args[1], error);
@@ -203,22 +212,45 @@ public static class CliApp
             return 1;
         }
 
-        output.WriteLine($"Scanned {result.PhotoCount} photo(s). Database: {result.DatabasePath}");
+        if (!json)
+        {
+            output.WriteLine($"Scanned {result.PhotoCount} photo(s). Database: {result.DatabasePath}");
+        }
 
         using var database = OpenCatalogDatabase();
-        var exitCode = ProcessPendingJobs(
+        var processing = ProcessPendingJobsCore(
             database,
             result.ProjectId,
             force: false,
             retryFailed: true,
             modelOverride,
-            output,
             error,
             secretStore,
-            ratingClient);
+            ratingClient,
+            json ? null : output);
+        if (processing is null)
+        {
+            return 1;
+        }
+
+        var project = database.ListProjects().First(project => project.Id == result.ProjectId);
+        var results = BuildResultsJson(database, project);
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new ScanJson(
+                    ToProjectScopeJson(project)!,
+                    new ScanSummaryJson(result.PhotoCount, result.PendingRatingJobs),
+                    processing,
+                    results),
+                JsonOptions));
+            return processing.Failed == 0 ? 0 : 1;
+        }
+
+        WriteProcessingSummary(processing, output);
         output.WriteLine("Results:");
-        WriteResultsSummary(database, database.ListProjects().First(project => project.Id == result.ProjectId), output);
-        return exitCode;
+        WriteResultsSummary(results, output);
+        return processing.Failed == 0 ? 0 : 1;
     }
 
     private static ImportResult? ImportDirectory(string directory, TextWriter error, bool forceJobs = false)
@@ -359,25 +391,33 @@ public static class CliApp
 
     private static int RunArenaList(string[] args, TextWriter output, TextWriter error)
     {
-        if (args.Length > 3)
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        var selectors = args.Skip(2).Where(arg => arg != "--json").ToArray();
+        if (selectors.Length > 1)
         {
             return WriteUsage(error);
         }
 
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (args.Length == 3)
+        if (selectors.Length == 1)
         {
-            project = FindProject(database, args[2]);
+            project = FindProject(database, selectors[0]);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {args[2]}");
+                error.WriteLine($"Project not found: {selectors[0]}");
                 return 1;
             }
         }
 
         var projectsById = database.ListProjects().ToDictionary(item => item.Id);
         var runs = database.ListArenaRuns(project?.Id);
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(BuildArenaListJson(database, project, runs), JsonOptions));
+            return 0;
+        }
+
         output.WriteLine(project is null ? "Arena runs: all" : $"Arena runs: {project.SourceDirectory}");
         foreach (var run in runs.OrderByDescending(item => item.CreatedAt))
         {
@@ -394,7 +434,9 @@ public static class CliApp
 
     private static int RunArenaShow(string[] args, TextWriter output, TextWriter error)
     {
-        if (args.Length != 3 || !long.TryParse(args[2], out var arenaRunId) || arenaRunId < 1)
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        var values = args.Skip(2).Where(arg => arg != "--json").ToArray();
+        if (values.Length != 1 || !long.TryParse(values[0], out var arenaRunId) || arenaRunId < 1)
         {
             return WriteUsage(error);
         }
@@ -408,6 +450,12 @@ public static class CliApp
         }
 
         var project = database.ListProjects().FirstOrDefault(item => item.Id == run.ProjectId);
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(BuildArenaShowJson(database, run, project), JsonOptions));
+            return 0;
+        }
+
         output.WriteLine($"Arena: {run.Id}");
         output.WriteLine($"Project: {project?.SourceDirectory ?? $"project:{run.ProjectId}"}");
         output.WriteLine($"provider: {run.Provider}");
@@ -421,19 +469,21 @@ public static class CliApp
 
     private static int RunStatus(string[] args, TextWriter output, TextWriter error)
     {
-        if (args.Length > 2)
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        var selectors = args.Skip(1).Where(arg => arg != "--json").ToArray();
+        if (selectors.Length > 1)
         {
             return WriteUsage(error);
         }
 
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (args.Length == 2)
+        if (selectors.Length == 1)
         {
-            project = FindProject(database, args[1]);
+            project = FindProject(database, selectors[0]);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {args[1]}");
+                error.WriteLine($"Project not found: {selectors[0]}");
                 return 1;
             }
         }
@@ -442,6 +492,14 @@ public static class CliApp
         var rated = project is null
             ? database.ListProjects().SelectMany(item => database.ListPhotos(item.Id)).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0)
             : database.ListPhotos(project.Id).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0);
+
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new StatusJson(project is null ? "all" : "project", ToProjectScopeJson(project), ToJobSummaryJson(summary), rated),
+                JsonOptions));
+            return 0;
+        }
 
         output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
         output.WriteLine($"jobs: {summary.Total}");
@@ -615,28 +673,37 @@ public static class CliApp
 
     private static int RunResults(string[] args, TextWriter output, TextWriter error)
     {
-        if (args.Length > 2)
+        var json = args.Contains("--json", StringComparer.Ordinal);
+        var selectors = args.Skip(1).Where(arg => arg != "--json").ToArray();
+        if (selectors.Length > 1)
         {
             return WriteUsage(error);
         }
 
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (args.Length == 2)
+        if (selectors.Length == 1)
         {
-            project = FindProject(database, args[1]);
+            project = FindProject(database, selectors[0]);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {args[1]}");
+                error.WriteLine($"Project not found: {selectors[0]}");
                 return 1;
             }
         }
 
-        WriteResultsSummary(database, project, output);
+        var results = BuildResultsJson(database, project);
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(results, JsonOptions));
+            return 0;
+        }
+
+        WriteResultsSummary(results, output);
         return 0;
     }
 
-    private static void WriteResultsSummary(ProjectDatabase database, PhotoProject? project, TextWriter output)
+    private static ResultsJson BuildResultsJson(ProjectDatabase database, PhotoProject? project)
     {
         var projects = project is null ? database.ListProjects() : [project];
         var jobsByPhotoId = projects
@@ -657,44 +724,61 @@ public static class CliApp
         var maybe = CountCategory(rated, "maybe");
         var reject = CountCategory(rated, "reject");
 
-        output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
-        output.WriteLine($"photos: {results.Length}");
-        output.WriteLine($"rated: {rated.Length}");
-        output.WriteLine($"unrated: {unrated}");
-        output.WriteLine($"failed: {failed}");
-        output.WriteLine($"keep: {keep}");
-        output.WriteLine($"maybe: {maybe}");
-        output.WriteLine($"reject: {reject}");
+        var orderedTop = rated
+            .OrderByDescending(item => item.Rating!.Score)
+            .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase)
+            .Take(5)
+            .Select(ToPhotoResultJson)
+            .ToArray();
+        var orderedAll = results
+            .OrderByDescending(item => item.Rating?.Score ?? 0)
+            .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase)
+            .Select(ToPhotoResultJson)
+            .ToArray();
+
+        return new ResultsJson(
+            project is null ? "all" : "project",
+            ToProjectScopeJson(project),
+            new ResultsSummaryJson(results.Length, rated.Length, unrated, failed, keep, maybe, reject),
+            orderedTop,
+            orderedAll);
+    }
+
+    private static void WriteResultsSummary(ResultsJson results, TextWriter output)
+    {
+        output.WriteLine(results.Project is null ? "Project: all" : $"Project: {results.Project.SourceDirectory}");
+        output.WriteLine($"photos: {results.Summary.Photos}");
+        output.WriteLine($"rated: {results.Summary.Rated}");
+        output.WriteLine($"unrated: {results.Summary.Unrated}");
+        output.WriteLine($"failed: {results.Summary.Failed}");
+        output.WriteLine($"keep: {results.Summary.Keep}");
+        output.WriteLine($"maybe: {results.Summary.Maybe}");
+        output.WriteLine($"reject: {results.Summary.Reject}");
         output.WriteLine("top:");
 
-        foreach (var item in rated
-                     .OrderByDescending(item => item.Rating!.Score)
-                     .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase)
-                     .Take(5))
+        foreach (var item in results.Top.Where(item => item.Score is not null))
         {
             output.WriteLine(
-                $"  {item.Rating!.Score.ToString("0.0", CultureInfo.InvariantCulture)} {item.Rating.Category} {item.Photo.BaseName} - {item.Rating.Reason}");
+                $"  {item.Score!.Value.ToString("0.0", CultureInfo.InvariantCulture)} {item.Category} {item.BaseName} - {item.Reason}");
         }
 
         output.WriteLine("all:");
-        foreach (var item in results
-                     .OrderByDescending(item => item.Rating?.Score ?? 0)
-                     .ThenBy(item => item.Photo.BaseName, StringComparer.OrdinalIgnoreCase))
+        foreach (var item in results.All)
         {
-            if (item.Rating is null)
+            if (item.Score is null)
             {
-                if (item.Job?.Status == "failed")
+                if (item.Status == "failed")
                 {
-                    output.WriteLine($"  failed {item.Photo.BaseName} - {item.Job.LastError ?? "unknown error"}");
+                    output.WriteLine($"  failed {item.BaseName} - {item.Error ?? "unknown error"}");
                     continue;
                 }
 
-                output.WriteLine($"  unrated {item.Photo.BaseName}");
+                output.WriteLine($"  unrated {item.BaseName}");
                 continue;
             }
 
             output.WriteLine(
-                $"  {item.Rating.Score.ToString("0.0", CultureInfo.InvariantCulture)} {item.Rating.Category} {item.Photo.BaseName} - {item.Rating.Reason}");
+                $"  {item.Score.Value.ToString("0.0", CultureInfo.InvariantCulture)} {item.Category} {item.BaseName} - {item.Reason}");
         }
     }
 
@@ -752,6 +836,114 @@ public static class CliApp
         }
     }
 
+    private static ArenaListJson BuildArenaListJson(ProjectDatabase database, PhotoProject? project, IReadOnlyList<ArenaRun> runs)
+    {
+        var projectsById = database.ListProjects().ToDictionary(item => item.Id);
+        return new ArenaListJson(
+            project is null ? "all" : "project",
+            ToProjectScopeJson(project),
+            runs
+                .OrderByDescending(item => item.CreatedAt)
+                .Select(run =>
+                {
+                    projectsById.TryGetValue(run.ProjectId, out var runProject);
+                    return new ArenaRunJson(
+                        run.Id,
+                        run.ProjectId,
+                        runProject?.SourceDirectory,
+                        run.Provider,
+                        run.ModelsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                        run.OutputLanguage,
+                        run.Limit,
+                        database.ListArenaRatings(run.Id).Count,
+                        run.CreatedAt);
+                })
+                .ToArray());
+    }
+
+    private static ArenaShowJson BuildArenaShowJson(ProjectDatabase database, ArenaRun run, PhotoProject? project)
+    {
+        var ratings = database.ListArenaRatings(run.Id);
+        return new ArenaShowJson(
+            new ArenaRunJson(
+                run.Id,
+                run.ProjectId,
+                project?.SourceDirectory,
+                run.Provider,
+                run.ModelsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                run.OutputLanguage,
+                run.Limit,
+                ratings.Count,
+                run.CreatedAt),
+            BuildArenaSummaryJson(database, ratings),
+            ratings
+                .GroupBy(rating => rating.PhotoId)
+                .Select(group =>
+                {
+                    var photo = database.GetPhoto(group.Key);
+                    return new ArenaPhotoJson(
+                        group.Key,
+                        photo?.BaseName ?? $"photo:{group.Key}",
+                        group
+                            .OrderBy(rating => rating.Model, StringComparer.OrdinalIgnoreCase)
+                            .Select(ToArenaRatingJson)
+                            .ToArray());
+                })
+                .OrderBy(item => item.BaseName, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
+    }
+
+    private static ArenaSummaryJson BuildArenaSummaryJson(ProjectDatabase database, IReadOnlyList<ArenaRating> ratings)
+    {
+        return new ArenaSummaryJson(
+            ratings
+                .GroupBy(rating => rating.Model)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var scored = group.Where(rating => rating.Score is not null).ToArray();
+                    var average = scored.Length == 0 ? 0 : scored.Average(rating => rating.Score!.Value);
+                    return new ArenaModelSummaryJson(
+                        group.Key,
+                        average,
+                        CountArenaCategory(scored, "keep"),
+                        CountArenaCategory(scored, "maybe"),
+                        CountArenaCategory(scored, "reject"),
+                        group.Count(rating => rating.Error is not null));
+                })
+                .ToArray(),
+            ratings
+                .Where(rating => rating.Score is not null)
+                .GroupBy(rating => rating.PhotoId)
+                .Select(group => new
+                {
+                    Photo = database.GetPhoto(group.Key),
+                    Ratings = group.OrderBy(rating => rating.Model, StringComparer.OrdinalIgnoreCase).ToArray(),
+                    Spread = group.Max(rating => rating.Score!.Value) - group.Min(rating => rating.Score!.Value),
+                })
+                .Where(item => item.Photo is not null && item.Ratings.Length > 1)
+                .OrderByDescending(item => item.Spread)
+                .ThenBy(item => item.Photo!.BaseName, StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .Select(item => new ArenaDisagreementJson(
+                    item.Photo!.Id,
+                    item.Photo.BaseName,
+                    item.Spread,
+                    item.Ratings.Select(ToArenaRatingJson).ToArray()))
+                .ToArray());
+    }
+
+    private static ArenaRatingJson ToArenaRatingJson(ArenaRating rating)
+    {
+        return new ArenaRatingJson(
+            rating.Model,
+            rating.PhotoType,
+            rating.Score,
+            rating.Category,
+            rating.Reason,
+            rating.Error);
+    }
+
     private static int CountArenaCategory(IEnumerable<ArenaRating> ratings, string category)
     {
         return ratings.Count(rating => string.Equals(rating.Category, category, StringComparison.OrdinalIgnoreCase));
@@ -760,6 +952,33 @@ public static class CliApp
     private static int CountCategory(IEnumerable<PhotoResult> results, string category)
     {
         return results.Count(item => string.Equals(item.Rating?.Category, category, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static PhotoRatingResultJson ToPhotoResultJson(PhotoResult item)
+    {
+        if (item.Rating is null)
+        {
+            var status = item.Job?.Status == "failed" ? "failed" : "unrated";
+            return new PhotoRatingResultJson(
+                item.Photo.Id,
+                item.Photo.BaseName,
+                null,
+                null,
+                null,
+                null,
+                status,
+                item.Job?.LastError);
+        }
+
+        return new PhotoRatingResultJson(
+            item.Photo.Id,
+            item.Photo.BaseName,
+            item.Rating.PhotoType,
+            item.Rating.Score,
+            item.Rating.Category,
+            item.Rating.Reason,
+            "rated",
+            null);
     }
 
     private static int RunExport(string[] args, TextWriter output, TextWriter error)
@@ -816,10 +1035,51 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
+        var result = ProcessPendingJobsCore(
+            database,
+            projectId,
+            force,
+            retryFailed,
+            modelOverride,
+            error,
+            secretStore,
+            ratingClient,
+            output);
+        if (result is null)
+        {
+            return 1;
+        }
+
+        WriteProcessingSummary(result, output);
+        return result.Failed == 0 ? 0 : 1;
+    }
+
+    private static void WriteProcessingSummary(ProcessingJson result, TextWriter output)
+    {
+        foreach (var message in result.Messages)
+        {
+            output.WriteLine(message);
+        }
+
+        output.WriteLine(
+            $"Rated {result.Rated} photo(s), skipped {result.Skipped}, failed {result.Failed}. Provider: {result.Provider}; model: {result.Model}; key source: {result.KeySource}; config: {result.ConfigPath}");
+    }
+
+    private static ProcessingJson? ProcessPendingJobsCore(
+        ProjectDatabase database,
+        long? projectId,
+        bool force,
+        bool retryFailed,
+        string? modelOverride,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient,
+        TextWriter? progressOutput)
+    {
         var context = CreateRatingContext(null, modelOverride, error, secretStore, ratingClient);
         if (context is null)
         {
-            return 1;
+            return null;
         }
 
         using var ownedClient = context.OwnedClient;
@@ -836,22 +1096,23 @@ public static class CliApp
             context.Profile,
             BuildRatingPrompt(context.Profile),
             force);
-        var result = ShouldUseLiveProgress(output, jobs.Count)
+        var result = progressOutput is not null && ShouldUseLiveProgress(progressOutput, jobs.Count)
             ? ProcessPendingJobsWithLiveProgress(worker, database, jobs, options)
             : worker.ProcessPending(
                 database,
                 jobs,
                 options,
-                progress => output.WriteLine(FormatProgressEvent(progress)));
+                progressOutput is null ? null : progress => progressOutput.WriteLine(FormatProgressEvent(progress)));
 
-        foreach (var message in result.Messages)
-        {
-            output.WriteLine(message);
-        }
-
-        output.WriteLine(
-            $"Rated {result.Rated} photo(s), skipped {result.Skipped}, failed {result.Failed}. Provider: {context.Profile.Provider}; model: {context.Profile.Model}; key source: {context.ApiKey.Source}; config: {context.Store.ConfigPath}");
-        return result.Failed == 0 ? 0 : 1;
+        return new ProcessingJson(
+            result.Rated,
+            result.Skipped,
+            result.Failed,
+            context.Profile.Provider,
+            context.Profile.Model,
+            context.ApiKey.Source,
+            context.Store.ConfigPath,
+            result.Messages.ToArray());
     }
 
     private static bool ShouldUseLiveProgress(TextWriter output, int jobCount)
@@ -1124,6 +1385,16 @@ public static class CliApp
             string.Equals(project.SourceDirectory, sourceDirectory, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static ProjectScopeJson? ToProjectScopeJson(PhotoProject? project)
+    {
+        return project is null ? null : new ProjectScopeJson(project.Id, project.SourceDirectory);
+    }
+
+    private static JobSummaryJson ToJobSummaryJson(RatingJobSummary summary)
+    {
+        return new JobSummaryJson(summary.Total, summary.Pending, summary.Completed, summary.Failed);
+    }
+
     private static ProjectJson ToProjectJson(PhotoProject project, ProjectDatabase database)
     {
         return new ProjectJson(
@@ -1181,14 +1452,14 @@ public static class CliApp
         error.WriteLine("  photo-selector config list");
         error.WriteLine("  photo-selector import <directory>");
         error.WriteLine("  photo-selector arena <directory> --models <model1,model2> [--limit <n>]");
-        error.WriteLine("  photo-selector arena list [directory]");
-        error.WriteLine("  photo-selector arena show <run-id>");
-        error.WriteLine("  photo-selector scan <directory> [--model <model>]");
-        error.WriteLine("  photo-selector status [directory]");
+        error.WriteLine("  photo-selector arena list [directory] [--json]");
+        error.WriteLine("  photo-selector arena show <run-id> [--json]");
+        error.WriteLine("  photo-selector scan <directory> [--model <model>] [--json]");
+        error.WriteLine("  photo-selector status [directory] [--json]");
         error.WriteLine("  photo-selector process [directory] [--model <model>]");
         error.WriteLine("  photo-selector flush <directory> [--now [--model <model>]]");
         error.WriteLine("  photo-selector reset ratings <directory> [--with-audit]");
-        error.WriteLine("  photo-selector results [directory]");
+        error.WriteLine("  photo-selector results [directory] [--json]");
         error.WriteLine("  photo-selector export <keep|maybe|reject> <directory> <target>");
         error.WriteLine("  photo-selector projects list --json");
         error.WriteLine("  photo-selector open <project-id|directory> --json");
@@ -1215,6 +1486,47 @@ public static class CliApp
 
     private sealed record PhotosJson(long ProjectId, PhotoJson[] Photos);
 
+    private sealed record ScanJson(
+        ProjectScopeJson Project,
+        ScanSummaryJson Scan,
+        ProcessingJson Processing,
+        ResultsJson Results);
+
+    private sealed record ScanSummaryJson(int Photos, int PendingRatingJobs);
+
+    private sealed record ResultsJson(
+        string Scope,
+        ProjectScopeJson? Project,
+        ResultsSummaryJson Summary,
+        PhotoRatingResultJson[] Top,
+        PhotoRatingResultJson[] All);
+
+    private sealed record StatusJson(
+        string Scope,
+        ProjectScopeJson? Project,
+        JobSummaryJson Jobs,
+        int Rated);
+
+    private sealed record ProcessingJson(
+        int Rated,
+        int Skipped,
+        int Failed,
+        string Provider,
+        string Model,
+        string KeySource,
+        string ConfigPath,
+        string[] Messages);
+
+    private sealed record ArenaListJson(
+        string Scope,
+        ProjectScopeJson? Project,
+        ArenaRunJson[] Runs);
+
+    private sealed record ArenaShowJson(
+        ArenaRunJson Run,
+        ArenaSummaryJson Summary,
+        ArenaPhotoJson[] Photos);
+
     private sealed record ImportResult(string DatabasePath, long ProjectId, int PhotoCount, int PendingRatingJobs);
 
     private sealed record PhotoResult(PhotoItem Photo, PhotoRating? Rating, RatingJob? Job);
@@ -1226,6 +1538,71 @@ public static class CliApp
         Uri BaseUrl,
         IPhotoRatingClient Client,
         IPhotoRatingClient? OwnedClient);
+
+    private sealed record ProjectScopeJson(long Id, string SourceDirectory);
+
+    private sealed record JobSummaryJson(int Total, int Pending, int Completed, int Failed);
+
+    private sealed record ResultsSummaryJson(
+        int Photos,
+        int Rated,
+        int Unrated,
+        int Failed,
+        int Keep,
+        int Maybe,
+        int Reject);
+
+    private sealed record PhotoRatingResultJson(
+        long PhotoId,
+        string BaseName,
+        string? PhotoType,
+        double? Score,
+        string? Category,
+        string? Reason,
+        string Status,
+        string? Error);
+
+    private sealed record ArenaRunJson(
+        long Id,
+        long ProjectId,
+        string? SourceDirectory,
+        string Provider,
+        string[] Models,
+        string OutputLanguage,
+        int Limit,
+        int RatingCount,
+        DateTimeOffset CreatedAt);
+
+    private sealed record ArenaSummaryJson(
+        ArenaModelSummaryJson[] Models,
+        ArenaDisagreementJson[] LargestDisagreements);
+
+    private sealed record ArenaModelSummaryJson(
+        string Model,
+        double Average,
+        int Keep,
+        int Maybe,
+        int Reject,
+        int Fail);
+
+    private sealed record ArenaDisagreementJson(
+        long PhotoId,
+        string BaseName,
+        double Spread,
+        ArenaRatingJson[] Ratings);
+
+    private sealed record ArenaPhotoJson(
+        long PhotoId,
+        string BaseName,
+        ArenaRatingJson[] Ratings);
+
+    private sealed record ArenaRatingJson(
+        string Model,
+        string? PhotoType,
+        double? Score,
+        string? Category,
+        string Reason,
+        string? Error);
 
     private sealed record ProjectSummaryJson(
         long Id,

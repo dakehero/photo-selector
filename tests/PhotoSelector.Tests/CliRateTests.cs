@@ -197,6 +197,56 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Results_status_and_arena_support_json_output()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        long arenaRunId;
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+            var photo = Assert.Single(database.ListPhotos(projectId));
+            database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+            arenaRunId = database.CreateArenaRun(projectId, "openrouter", "model-a,model-b", "prompt", "zh-Hans", 1);
+            database.SaveArenaRating(arenaRunId, photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.", "prompt", "{}", "{}", "{}", 200, null);
+            database.SaveArenaRating(arenaRunId, photo.Id, "openrouter", "model-b", "street", 5.4, "maybe", "[]", "Flat alternate.", "prompt", "{}", "{}", "{}", 200, null);
+        }
+
+        var resultsOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["results", sourceDirectory, "--json"], resultsOutput, TextWriter.Null));
+        using var resultsJson = JsonDocument.Parse(resultsOutput.ToString());
+        Assert.Equal(sourceDirectory, resultsJson.RootElement.GetProperty("project").GetProperty("sourceDirectory").GetString());
+        Assert.Equal(1, resultsJson.RootElement.GetProperty("summary").GetProperty("photos").GetInt32());
+        Assert.Equal(1, resultsJson.RootElement.GetProperty("summary").GetProperty("keep").GetInt32());
+        Assert.Equal("IMG_0001", resultsJson.RootElement.GetProperty("all")[0].GetProperty("baseName").GetString());
+
+        var statusOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["status", sourceDirectory, "--json"], statusOutput, TextWriter.Null));
+        using var statusJson = JsonDocument.Parse(statusOutput.ToString());
+        Assert.Equal(1, statusJson.RootElement.GetProperty("rated").GetInt32());
+        Assert.Equal(0, statusJson.RootElement.GetProperty("jobs").GetProperty("pending").GetInt32());
+
+        var listOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["arena", "list", sourceDirectory, "--json"], listOutput, TextWriter.Null));
+        using var listJson = JsonDocument.Parse(listOutput.ToString());
+        Assert.Equal(arenaRunId, listJson.RootElement.GetProperty("runs")[0].GetProperty("id").GetInt64());
+
+        var showOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["arena", "show", arenaRunId.ToString(), "--json"], showOutput, TextWriter.Null));
+        using var showJson = JsonDocument.Parse(showOutput.ToString());
+        Assert.Equal(arenaRunId, showJson.RootElement.GetProperty("run").GetProperty("id").GetInt64());
+        Assert.Equal("IMG_0001", showJson.RootElement.GetProperty("photos")[0].GetProperty("baseName").GetString());
+        Assert.Equal("model-a", showJson.RootElement.GetProperty("summary").GetProperty("models")[0].GetProperty("model").GetString());
+    }
+
+    [Fact]
     public void Export_keep_copies_latest_keep_rated_jpeg_and_raw_pairs_from_catalog()
     {
         using var tempDirectory = new TempDirectory();
@@ -297,6 +347,48 @@ public sealed class CliRateTests
         var project = Assert.Single(database.ListProjects());
         var photo = Assert.Single(database.ListPhotos(project.Id));
         Assert.Single(database.ListRatings(photo.Id));
+    }
+
+    [Fact]
+    public void Scan_json_outputs_only_final_machine_readable_summary()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                7.6,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.5, "Good timing.")],
+                "Useful candidate."));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(
+            ["scan", sourceDirectory, "--json"],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        var text = output.ToString();
+        Assert.DoesNotContain("Scanned", text);
+        Assert.DoesNotContain("rating 1/1", text);
+        using var json = JsonDocument.Parse(text);
+        Assert.Equal(sourceDirectory, json.RootElement.GetProperty("project").GetProperty("sourceDirectory").GetString());
+        Assert.Equal(1, json.RootElement.GetProperty("scan").GetProperty("photos").GetInt32());
+        Assert.Equal(1, json.RootElement.GetProperty("processing").GetProperty("rated").GetInt32());
+        Assert.Equal("maybe", json.RootElement.GetProperty("results").GetProperty("all")[0].GetProperty("category").GetString());
+        Assert.Equal(jpegPath, Assert.Single(client.Requests).ImagePath);
     }
 
     [Fact]
