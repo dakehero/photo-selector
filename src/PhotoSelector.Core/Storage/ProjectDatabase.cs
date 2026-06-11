@@ -63,6 +63,10 @@ public sealed class ProjectDatabase : IDisposable
                 raw_path TEXT NULL,
                 capture_time TEXT NULL,
                 import_status TEXT NOT NULL,
+                jpeg_size INTEGER NULL,
+                jpeg_mtime_utc TEXT NULL,
+                raw_size INTEGER NULL,
+                raw_mtime_utc TEXT NULL,
                 FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
             );
 
@@ -147,6 +151,10 @@ public sealed class ProjectDatabase : IDisposable
         command.ExecuteNonQuery();
         AddColumnIfMissing("ratings", "photo_type", "TEXT NOT NULL DEFAULT 'unknown'");
         AddColumnIfMissing("ratings", "criteria_json", "TEXT NOT NULL DEFAULT '[]'");
+        AddColumnIfMissing("photos", "jpeg_size", "INTEGER NULL");
+        AddColumnIfMissing("photos", "jpeg_mtime_utc", "TEXT NULL");
+        AddColumnIfMissing("photos", "raw_size", "INTEGER NULL");
+        AddColumnIfMissing("photos", "raw_mtime_utc", "TEXT NULL");
     }
 
     private void AddColumnIfMissing(string tableName, string columnName, string definition)
@@ -216,15 +224,18 @@ public sealed class ProjectDatabase : IDisposable
     {
         var pairList = pairs.ToArray();
         using var transaction = connection.BeginTransaction();
+        var now = FormatTimestamp(DateTimeOffset.UtcNow);
 
         var importedBaseNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in pairList)
         {
             importedBaseNames.Add(pair.BaseName);
+            var jpegFingerprint = GetFileFingerprint(pair.JpegPath);
+            var rawFingerprint = GetFileFingerprint(pair.RawPath);
             using var existingCommand = connection.CreateCommand();
             existingCommand.Transaction = transaction;
             existingCommand.CommandText = """
-                SELECT id
+                SELECT id, jpeg_path, raw_path, jpeg_size, jpeg_mtime_utc, raw_size, raw_mtime_utc
                 FROM photos
                 WHERE project_id = $project_id
                   AND base_name = $base_name COLLATE NOCASE
@@ -246,7 +257,11 @@ public sealed class ProjectDatabase : IDisposable
                         jpeg_path,
                         raw_path,
                         capture_time,
-                        import_status
+                        import_status,
+                        jpeg_size,
+                        jpeg_mtime_utc,
+                        raw_size,
+                        raw_mtime_utc
                     )
                     VALUES (
                         $project_id,
@@ -254,7 +269,11 @@ public sealed class ProjectDatabase : IDisposable
                         $jpeg_path,
                         $raw_path,
                         $capture_time,
-                        $import_status
+                        $import_status,
+                        $jpeg_size,
+                        $jpeg_mtime_utc,
+                        $raw_size,
+                        $raw_mtime_utc
                     );
                     """;
                 insertCommand.Parameters.AddWithValue("$project_id", projectId);
@@ -263,9 +282,42 @@ public sealed class ProjectDatabase : IDisposable
                 insertCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
                 insertCommand.Parameters.AddWithValue("$capture_time", DBNull.Value);
                 insertCommand.Parameters.AddWithValue("$import_status", "imported");
+                insertCommand.Parameters.AddWithValue("$jpeg_size", (object?)jpegFingerprint.Size ?? DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$jpeg_mtime_utc", (object?)jpegFingerprint.ModifiedAt ?? DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$raw_size", (object?)rawFingerprint.Size ?? DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$raw_mtime_utc", (object?)rawFingerprint.ModifiedAt ?? DBNull.Value);
                 insertCommand.ExecuteNonQuery();
                 continue;
             }
+
+            using var existingReaderCommand = connection.CreateCommand();
+            existingReaderCommand.Transaction = transaction;
+            existingReaderCommand.CommandText = """
+                SELECT id, jpeg_path, raw_path, jpeg_size, jpeg_mtime_utc, raw_size, raw_mtime_utc
+                FROM photos
+                WHERE id = $id;
+                """;
+            existingReaderCommand.Parameters.AddWithValue("$id", (long)existingId);
+            using var existingReader = existingReaderCommand.ExecuteReader();
+            existingReader.Read();
+            var oldJpegPath = existingReader.IsDBNull(1) ? null : existingReader.GetString(1);
+            var oldRawPath = existingReader.IsDBNull(2) ? null : existingReader.GetString(2);
+            var oldJpegSize = existingReader.IsDBNull(3) ? (long?)null : existingReader.GetInt64(3);
+            var oldJpegMtime = existingReader.IsDBNull(4) ? null : existingReader.GetString(4);
+            var oldRawSize = existingReader.IsDBNull(5) ? (long?)null : existingReader.GetInt64(5);
+            var oldRawMtime = existingReader.IsDBNull(6) ? null : existingReader.GetString(6);
+            var hasExistingFingerprint = oldJpegSize is not null ||
+                oldJpegMtime is not null ||
+                oldRawSize is not null ||
+                oldRawMtime is not null;
+            var pathChanged = !string.Equals(oldJpegPath, pair.JpegPath, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(oldRawPath, pair.RawPath, StringComparison.OrdinalIgnoreCase);
+            var fingerprintChanged = hasExistingFingerprint &&
+                (!Nullable.Equals(oldJpegSize, jpegFingerprint.Size) ||
+                    oldJpegMtime != jpegFingerprint.ModifiedAt ||
+                    !Nullable.Equals(oldRawSize, rawFingerprint.Size) ||
+                    oldRawMtime != rawFingerprint.ModifiedAt);
+            var changed = pathChanged || fingerprintChanged;
 
             using var updateCommand = connection.CreateCommand();
             updateCommand.Transaction = transaction;
@@ -274,15 +326,28 @@ public sealed class ProjectDatabase : IDisposable
                 SET base_name = $base_name,
                     jpeg_path = $jpeg_path,
                     raw_path = $raw_path,
-                    import_status = $import_status
+                    import_status = $import_status,
+                    jpeg_size = $jpeg_size,
+                    jpeg_mtime_utc = $jpeg_mtime_utc,
+                    raw_size = $raw_size,
+                    raw_mtime_utc = $raw_mtime_utc
                 WHERE id = $id;
                 """;
             updateCommand.Parameters.AddWithValue("$id", (long)existingId);
             updateCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
             updateCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
             updateCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
-            updateCommand.Parameters.AddWithValue("$import_status", "imported");
+            updateCommand.Parameters.AddWithValue("$import_status", changed ? "changed" : "imported");
+            updateCommand.Parameters.AddWithValue("$jpeg_size", (object?)jpegFingerprint.Size ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$jpeg_mtime_utc", (object?)jpegFingerprint.ModifiedAt ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$raw_size", (object?)rawFingerprint.Size ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$raw_mtime_utc", (object?)rawFingerprint.ModifiedAt ?? DBNull.Value);
             updateCommand.ExecuteNonQuery();
+
+            if (changed && !string.IsNullOrWhiteSpace(pair.JpegPath))
+            {
+                RequeueRatingJob(transaction, projectId, (long)existingId, now);
+            }
         }
 
         using (var staleCommand = connection.CreateCommand())
@@ -342,7 +407,18 @@ public sealed class ProjectDatabase : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, project_id, base_name, jpeg_path, raw_path, capture_time, import_status
+            SELECT
+                id,
+                project_id,
+                base_name,
+                jpeg_path,
+                raw_path,
+                capture_time,
+                import_status,
+                jpeg_size,
+                jpeg_mtime_utc,
+                raw_size,
+                raw_mtime_utc
             FROM photos
             WHERE project_id = $project_id
             ORDER BY base_name COLLATE NOCASE, base_name, id;
@@ -360,7 +436,11 @@ public sealed class ProjectDatabase : IDisposable
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : ParseTimestamp(reader.GetString(5)),
-                reader.GetString(6)));
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                reader.IsDBNull(8) ? null : ParseTimestamp(reader.GetString(8)),
+                reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                reader.IsDBNull(10) ? null : ParseTimestamp(reader.GetString(10))));
         }
 
         return photos;
@@ -370,7 +450,18 @@ public sealed class ProjectDatabase : IDisposable
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, project_id, base_name, jpeg_path, raw_path, capture_time, import_status
+            SELECT
+                id,
+                project_id,
+                base_name,
+                jpeg_path,
+                raw_path,
+                capture_time,
+                import_status,
+                jpeg_size,
+                jpeg_mtime_utc,
+                raw_size,
+                raw_mtime_utc
             FROM photos
             WHERE id = $photo_id;
             """;
@@ -389,7 +480,11 @@ public sealed class ProjectDatabase : IDisposable
             reader.IsDBNull(3) ? null : reader.GetString(3),
             reader.IsDBNull(4) ? null : reader.GetString(4),
             reader.IsDBNull(5) ? null : ParseTimestamp(reader.GetString(5)),
-            reader.GetString(6));
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetInt64(7),
+            reader.IsDBNull(8) ? null : ParseTimestamp(reader.GetString(8)),
+            reader.IsDBNull(9) ? null : reader.GetInt64(9),
+            reader.IsDBNull(10) ? null : ParseTimestamp(reader.GetString(10)));
     }
 
     public int EnqueueRatingJobs(long projectId, bool force = false)
@@ -435,6 +530,26 @@ public sealed class ProjectDatabase : IDisposable
         }
 
         return enqueued;
+    }
+
+    private void RequeueRatingJob(SqliteTransaction transaction, long projectId, long photoId, string updatedAt)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO rating_jobs (project_id, photo_id, status, attempts, last_error, created_at, updated_at)
+            VALUES ($project_id, $photo_id, 'pending', 0, NULL, $created_at, $updated_at)
+            ON CONFLICT(photo_id) DO UPDATE SET
+                status = 'pending',
+                attempts = 0,
+                last_error = NULL,
+                updated_at = $updated_at;
+            """;
+        command.Parameters.AddWithValue("$project_id", projectId);
+        command.Parameters.AddWithValue("$photo_id", photoId);
+        command.Parameters.AddWithValue("$created_at", updatedAt);
+        command.Parameters.AddWithValue("$updated_at", updatedAt);
+        command.ExecuteNonQuery();
     }
 
     public IReadOnlyList<RatingJob> ListRatingJobs(long? projectId = null)
@@ -974,6 +1089,17 @@ public sealed class ProjectDatabase : IDisposable
             reader.IsDBNull(5) ? null : reader.GetString(5),
             ParseTimestamp(reader.GetString(6)),
             ParseTimestamp(reader.GetString(7)));
+    }
+
+    private static (long? Size, string? ModifiedAt) GetFileFingerprint(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return (null, null);
+        }
+
+        var file = new FileInfo(path);
+        return (file.Length, FormatTimestamp(file.LastWriteTimeUtc));
     }
 
     private static string FormatTimestamp(DateTimeOffset value)

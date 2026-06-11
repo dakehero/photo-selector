@@ -349,6 +349,38 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Scan_requeues_photo_when_same_file_changes()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate."));
+
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, client));
+        Assert.Single(client.Requests);
+
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, client));
+        Assert.Single(client.Requests);
+
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xD9 });
+        File.SetLastWriteTimeUtc(jpegPath, DateTime.UtcNow.AddMinutes(1));
+
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, client));
+        Assert.Equal(2, client.Requests.Count);
+    }
+
+    [Fact]
     public void Process_sends_each_pending_jpeg_to_ai_and_saves_ratings()
     {
         using var tempDirectory = new TempDirectory();
@@ -561,13 +593,31 @@ public sealed class CliRateTests
         Assert.Contains("IMG_0001", text);
         Assert.Equal(["model-a", "model-b"], client.Requests.Select(request => request.Model).ToArray());
 
-        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
-        database.Migrate();
-        var project = Assert.Single(database.ListProjects());
-        var photo = Assert.Single(database.ListPhotos(project.Id));
-        Assert.Empty(database.ListRatings(photo.Id));
-        var run = Assert.Single(database.ListArenaRuns(project.Id));
-        Assert.Equal(2, database.ListArenaRatings(run.Id).Count);
+        long runId;
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var project = Assert.Single(database.ListProjects());
+            var photo = Assert.Single(database.ListPhotos(project.Id));
+            Assert.Empty(database.ListRatings(photo.Id));
+            var run = Assert.Single(database.ListArenaRuns(project.Id));
+            runId = run.Id;
+            Assert.Equal(2, database.ListArenaRatings(run.Id).Count);
+        }
+
+        var listOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["arena", "list", sourceDirectory], listOutput, TextWriter.Null));
+        Assert.Contains($"Run: {runId}", listOutput.ToString());
+        Assert.Contains("model-a,model-b", listOutput.ToString());
+
+        var showOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["arena", "show", runId.ToString()], showOutput, TextWriter.Null));
+        var showText = showOutput.ToString();
+        Assert.Contains($"Arena: {runId}", showText);
+        Assert.Contains("photos:", showText);
+        Assert.Contains("IMG_0001", showText);
+        Assert.Contains("model-a 8.2 keep - Strong keeper.", showText);
+        Assert.Contains("model-b 5.4 maybe - Flat alternate.", showText);
     }
 
     [Fact]

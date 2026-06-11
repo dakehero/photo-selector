@@ -39,7 +39,9 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                 continue;
             }
 
-            if (!options.Force && database.ListRatings(photo.Id).Count > 0)
+            if (!options.Force &&
+                !string.Equals(photo.ImportStatus, "changed", StringComparison.OrdinalIgnoreCase) &&
+                database.ListRatings(photo.Id).Count > 0)
             {
                 skipped++;
                 database.MarkRatingJobCompleted(job.Id);

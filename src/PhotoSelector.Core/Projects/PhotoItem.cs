@@ -7,4 +7,8 @@ public sealed record PhotoItem(
     string? JpegPath,
     string? RawPath,
     DateTimeOffset? CaptureTime,
-    string ImportStatus);
+    string ImportStatus,
+    long? JpegSize = null,
+    DateTimeOffset? JpegModifiedAt = null,
+    long? RawSize = null,
+    DateTimeOffset? RawModifiedAt = null);

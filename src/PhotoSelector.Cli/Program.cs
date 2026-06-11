@@ -244,6 +244,16 @@ public static class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
+        if (args.Length >= 2 && args[1] == "list")
+        {
+            return RunArenaList(args, output, error);
+        }
+
+        if (args.Length >= 2 && args[1] == "show")
+        {
+            return RunArenaShow(args, output, error);
+        }
+
         if (args.Length is not (4 or 6) || args[2] != "--models")
         {
             return WriteUsage(error);
@@ -344,6 +354,68 @@ public static class CliApp
         }
 
         WriteArenaSummary(database, arenaRunId, output);
+        return 0;
+    }
+
+    private static int RunArenaList(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length > 3)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        PhotoProject? project = null;
+        if (args.Length == 3)
+        {
+            project = FindProject(database, args[2]);
+            if (project is null)
+            {
+                error.WriteLine($"Project not found: {args[2]}");
+                return 1;
+            }
+        }
+
+        var projectsById = database.ListProjects().ToDictionary(item => item.Id);
+        var runs = database.ListArenaRuns(project?.Id);
+        output.WriteLine(project is null ? "Arena runs: all" : $"Arena runs: {project.SourceDirectory}");
+        foreach (var run in runs.OrderByDescending(item => item.CreatedAt))
+        {
+            var source = projectsById.TryGetValue(run.ProjectId, out var runProject)
+                ? runProject.SourceDirectory
+                : $"project:{run.ProjectId}";
+            var ratingCount = database.ListArenaRatings(run.Id).Count;
+            output.WriteLine(
+                $"Run: {run.Id} project: {source} provider: {run.Provider} models: {run.ModelsCsv} ratings: {ratingCount} limit: {run.Limit} created: {run.CreatedAt:O}");
+        }
+
+        return 0;
+    }
+
+    private static int RunArenaShow(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Length != 3 || !long.TryParse(args[2], out var arenaRunId) || arenaRunId < 1)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        var run = database.ListArenaRuns().FirstOrDefault(item => item.Id == arenaRunId);
+        if (run is null)
+        {
+            error.WriteLine($"Arena run not found: {arenaRunId}");
+            return 1;
+        }
+
+        var project = database.ListProjects().FirstOrDefault(item => item.Id == run.ProjectId);
+        output.WriteLine($"Arena: {run.Id}");
+        output.WriteLine($"Project: {project?.SourceDirectory ?? $"project:{run.ProjectId}"}");
+        output.WriteLine($"provider: {run.Provider}");
+        output.WriteLine($"models: {run.ModelsCsv}");
+        output.WriteLine($"limit: {run.Limit}");
+        output.WriteLine($"created: {run.CreatedAt:O}");
+        WriteArenaSummary(database, run.Id, output);
+        WriteArenaPhotoDetails(database, run.Id, output);
         return 0;
     }
 
@@ -655,6 +727,28 @@ public static class CliApp
         {
             output.WriteLine(
                 $"{disagreement.Photo!.BaseName} {string.Join(" ", disagreement.Ratings.Select(rating => $"{rating.Model}={rating.Score!.Value.ToString("0.0", CultureInfo.InvariantCulture)}"))}");
+        }
+    }
+
+    private static void WriteArenaPhotoDetails(ProjectDatabase database, long arenaRunId, TextWriter output)
+    {
+        var ratings = database.ListArenaRatings(arenaRunId);
+        output.WriteLine("photos:");
+        foreach (var group in ratings.GroupBy(rating => rating.PhotoId))
+        {
+            var photo = database.GetPhoto(group.Key);
+            output.WriteLine(photo?.BaseName ?? $"photo:{group.Key}");
+            foreach (var rating in group.OrderBy(rating => rating.Model, StringComparer.OrdinalIgnoreCase))
+            {
+                if (rating.Score is null)
+                {
+                    output.WriteLine($"  {rating.Model} failed - {rating.Error ?? "unknown error"}");
+                    continue;
+                }
+
+                output.WriteLine(
+                    $"  {rating.Model} {rating.Score.Value.ToString("0.0", CultureInfo.InvariantCulture)} {rating.Category} - {rating.Reason}");
+            }
         }
     }
 
@@ -1087,6 +1181,8 @@ public static class CliApp
         error.WriteLine("  photo-selector config list");
         error.WriteLine("  photo-selector import <directory>");
         error.WriteLine("  photo-selector arena <directory> --models <model1,model2> [--limit <n>]");
+        error.WriteLine("  photo-selector arena list [directory]");
+        error.WriteLine("  photo-selector arena show <run-id>");
         error.WriteLine("  photo-selector scan <directory> [--model <model>]");
         error.WriteLine("  photo-selector status [directory]");
         error.WriteLine("  photo-selector process [directory] [--model <model>]");
