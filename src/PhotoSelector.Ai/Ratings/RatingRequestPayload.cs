@@ -6,12 +6,18 @@ namespace PhotoSelector.Ai.Ratings;
 internal static class RatingRequestPayload
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private const int MaxPreviewEdge = 1600;
-    private const int PreviewJpegQuality = 82;
 
     public static async Task<string> CreateJpegDataUrlAsync(string imagePath, CancellationToken cancellationToken)
     {
-        var imageBytes = await CreateJpegPreviewAsync(imagePath, cancellationToken);
+        return await CreateJpegDataUrlAsync(imagePath, PhotoPreviewOptions.Standard, cancellationToken);
+    }
+
+    public static async Task<string> CreateJpegDataUrlAsync(
+        string imagePath,
+        PhotoPreviewOptions preview,
+        CancellationToken cancellationToken)
+    {
+        var imageBytes = await CreateJpegPreviewAsync(imagePath, preview, cancellationToken);
         return $"data:image/jpeg;base64,{Convert.ToBase64String(imageBytes)}";
     }
 
@@ -40,6 +46,7 @@ internal static class RatingRequestPayload
 
     public static string CreateRedactedRequestJson(PhotoRatingRequest request)
     {
+        var preview = request.Preview ?? PhotoPreviewOptions.Standard;
         var redacted = new
         {
             model = request.Model,
@@ -47,8 +54,8 @@ internal static class RatingRequestPayload
             image_path = request.ImagePath,
             preview = new
             {
-                max_edge = MaxPreviewEdge,
-                jpeg_quality = PreviewJpegQuality,
+                max_edge = preview.MaxEdge,
+                jpeg_quality = preview.JpegQuality,
                 image_url = "[redacted-data-url]",
             },
         };
@@ -58,20 +65,29 @@ internal static class RatingRequestPayload
 
     private static async Task<byte[]> CreateJpegPreviewAsync(string imagePath, CancellationToken cancellationToken)
     {
+        return await CreateJpegPreviewAsync(imagePath, PhotoPreviewOptions.Standard, cancellationToken);
+    }
+
+    private static async Task<byte[]> CreateJpegPreviewAsync(
+        string imagePath,
+        PhotoPreviewOptions preview,
+        CancellationToken cancellationToken)
+    {
         await using var input = File.OpenRead(imagePath);
         using var image = new MagickImage(input);
         image.AutoOrient();
 
-        if (image.Width > MaxPreviewEdge || image.Height > MaxPreviewEdge)
+        var maxEdge = (uint)preview.MaxEdge;
+        if (image.Width > maxEdge || image.Height > maxEdge)
         {
-            image.Resize(new MagickGeometry(MaxPreviewEdge, MaxPreviewEdge)
+            image.Resize(new MagickGeometry(maxEdge, maxEdge)
             {
                 IgnoreAspectRatio = false,
             });
         }
 
         image.Format = MagickFormat.Jpeg;
-        image.Quality = PreviewJpegQuality;
+        image.Quality = (uint)preview.JpegQuality;
         return await Task.Run(image.ToByteArray, cancellationToken);
     }
 }

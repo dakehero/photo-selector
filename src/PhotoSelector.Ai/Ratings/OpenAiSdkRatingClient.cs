@@ -15,7 +15,10 @@ public sealed class OpenAiSdkRatingClient : IPhotoRatingClient, IDisposable
             throw new FileNotFoundException($"Image not found: {request.ImagePath}", request.ImagePath);
         }
 
-        var dataUrl = await RatingRequestPayload.CreateJpegDataUrlAsync(request.ImagePath, cancellationToken);
+        var dataUrl = await RatingRequestPayload.CreateJpegDataUrlAsync(
+            request.ImagePath,
+            request.Preview ?? PhotoPreviewOptions.Standard,
+            cancellationToken);
         var requestJsonRedacted = RatingRequestPayload.CreateRedactedRequestJson(request);
         var bodyJson = RatingRequestPayload.CreateChatCompletionsRequestJson(request, dataUrl);
 

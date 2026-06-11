@@ -49,7 +49,8 @@ public sealed class OpenAiCompatibleRatingClientTests
                 "sk-test",
                 "qwen/qwen3.7-max",
                 DefaultPhotoRatingPrompt.Text,
-                imagePath),
+                imagePath,
+                new PhotoPreviewOptions(512, 61)),
             CancellationToken.None);
 
         Assert.NotNull(result.Rating);
@@ -63,6 +64,8 @@ public sealed class OpenAiCompatibleRatingClientTests
         Assert.Contains("\"choices\"", result.Audit.RawResponseJson);
         Assert.Contains("\"photo_type\":\"portrait\"", result.Audit.RawMessageContent);
         Assert.Contains("\"model\":\"qwen/qwen3.7-max\"", result.Audit.RequestJsonRedacted);
+        Assert.Contains("\"max_edge\":512", result.Audit.RequestJsonRedacted);
+        Assert.Contains("\"jpeg_quality\":61", result.Audit.RequestJsonRedacted);
         Assert.Contains("\"image_url\":\"[redacted-data-url]\"", result.Audit.RequestJsonRedacted);
         Assert.DoesNotContain("sk-test", result.Audit.RequestJsonRedacted);
         Assert.DoesNotContain("data:image", result.Audit.RequestJsonRedacted);

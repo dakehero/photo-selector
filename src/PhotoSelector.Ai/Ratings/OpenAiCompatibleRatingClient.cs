@@ -36,7 +36,10 @@ public sealed class OpenAiCompatibleRatingClient : IPhotoRatingClient, IDisposab
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint);
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.ApiKey);
 
-        var dataUrl = await RatingRequestPayload.CreateJpegDataUrlAsync(request.ImagePath, cancellationToken);
+        var dataUrl = await RatingRequestPayload.CreateJpegDataUrlAsync(
+            request.ImagePath,
+            request.Preview ?? PhotoPreviewOptions.Standard,
+            cancellationToken);
         var requestJsonRedacted = RatingRequestPayload.CreateRedactedRequestJson(request);
         var bodyJson = RatingRequestPayload.CreateChatCompletionsRequestJson(request, dataUrl);
 

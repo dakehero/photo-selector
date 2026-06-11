@@ -97,7 +97,8 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                             options.ApiKey,
                             options.Profile.Model,
                             options.Prompt,
-                            item.Photo.JpegPath!),
+                            item.Photo.JpegPath!,
+                            options.Preview),
                         cancellationToken);
                 var rating = result.Rating;
 
@@ -179,7 +180,8 @@ public sealed record RatingWorkerOptions(
     AiProfile Profile,
     string Prompt,
     bool Force,
-    int Concurrency = 1);
+    int Concurrency = 1,
+    PhotoPreviewOptions? Preview = null);
 
 public sealed record RatingWorkerResult(
     int Rated,

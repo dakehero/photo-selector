@@ -50,6 +50,9 @@ public static class CliApp
             {
                 "auth" => RunAuth(args, output, error, input, secretStore),
                 "config" => RunConfig(args, output, error),
+                "pick" => RunPick(args, output, error, secretStore, ratingClient),
+                "rate" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate),
+                "coach" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach),
                 "import" => RunImport(args, output, error),
                 "arena" => RunArena(args, output, error, secretStore, ratingClient),
                 "scan" => RunScan(args, output, error, secretStore, ratingClient),
@@ -172,6 +175,144 @@ public static class CliApp
         output.WriteLine(
             $"Imported {result.PhotoCount} photo(s). Project: {result.ProjectId}. Catalog: {result.DatabasePath}; pending: {result.PendingRatingJobs}");
         return 0;
+    }
+
+    private static int RunPick(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        if (args.Length < 2)
+        {
+            return WriteUsage(error);
+        }
+
+        var options = ParseProductCommandOptions(args, 2, PhotoPreviewOptions.Fast, allowConcurrency: true, error);
+        if (options is null)
+        {
+            return 1;
+        }
+
+        var result = ImportDirectory(args[1], error);
+        if (result is null)
+        {
+            return 1;
+        }
+
+        if (!options.Json)
+        {
+            output.WriteLine($"Picked {result.PhotoCount} photo(s).");
+        }
+
+        using var database = OpenCatalogDatabase();
+        var processing = ProcessPendingJobsCore(
+            database,
+            result.ProjectId,
+            force: false,
+            retryFailed: true,
+            options.ModelOverride,
+            error,
+            secretStore,
+            ratingClient,
+            options.Json ? null : output,
+            SelectionPrompt.Text,
+            options.Preview,
+            options.ConcurrencyOverride);
+        if (processing is null)
+        {
+            return 1;
+        }
+
+        var project = database.ListProjects().First(project => project.Id == result.ProjectId);
+        var results = BuildResultsJson(database, project);
+        if (options.Json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new ProductDirectoryJson(
+                    "pick",
+                    ToProjectScopeJson(project)!,
+                    new ScanSummaryJson(result.PhotoCount, result.PendingRatingJobs),
+                    processing,
+                    results),
+                JsonOptions));
+            return processing.Failed == 0 ? 0 : 1;
+        }
+
+        WriteProcessingSummary(processing, output);
+        output.WriteLine("Results:");
+        WriteResultsSummary(results, output);
+        return processing.Failed == 0 ? 0 : 1;
+    }
+
+    private static int RunSinglePhotoProductCommand(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient,
+        ProductCommandKind kind)
+    {
+        if (args.Length < 2)
+        {
+            return WriteUsage(error);
+        }
+
+        var commandName = kind == ProductCommandKind.Rate ? "rate" : "coach";
+        var imagePath = Path.GetFullPath(args[1]);
+        if (Directory.Exists(imagePath) || !File.Exists(imagePath))
+        {
+            error.WriteLine($"{commandName} requires one image file.");
+            return 1;
+        }
+
+        var options = ParseProductCommandOptions(args, 2, PhotoPreviewOptions.High, allowConcurrency: false, error);
+        if (options is null)
+        {
+            return 1;
+        }
+
+        var context = CreateRatingContext(null, options.ModelOverride, error, secretStore, ratingClient);
+        if (context is null)
+        {
+            return 1;
+        }
+
+        using var ownedClient = context.OwnedClient;
+        var prompt = BuildRatingPrompt(
+            context.Profile,
+            kind == ProductCommandKind.Rate ? RatingPrompt.Text : CoachingPrompt.Text);
+        var result = context.Client
+            .RatePhotoAsync(
+                new PhotoRatingRequest(
+                    context.BaseUrl,
+                    context.ApiKey.Secret!,
+                    context.Profile.Model,
+                    prompt,
+                    imagePath,
+                    options.Preview),
+                CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        if (options.Json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new SinglePhotoProductJson(commandName, imagePath, ToProductRatingJson(result.Rating), result.Audit.Error),
+                JsonOptions));
+        }
+        else if (result.Rating is null)
+        {
+            output.WriteLine($"{commandName}: failed {Path.GetFileNameWithoutExtension(imagePath)} - {result.Audit.Error ?? "unknown error"}");
+        }
+        else
+        {
+            output.WriteLine(
+                $"{commandName}: {result.Rating.Score.ToString("0.0", CultureInfo.InvariantCulture)} {result.Rating.Category} {Path.GetFileNameWithoutExtension(imagePath)} - {result.Rating.Reason}");
+        }
+
+        return result.Rating is null ? 1 : 0;
     }
 
     private static int RunScan(
@@ -1024,6 +1165,108 @@ public static class CliApp
             string.Equals(value, "reject", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static ProductCommandOptions? ParseProductCommandOptions(
+        string[] args,
+        int startIndex,
+        PhotoPreviewOptions defaultPreview,
+        bool allowConcurrency,
+        TextWriter error)
+    {
+        var json = false;
+        string? modelOverride = null;
+        int? concurrencyOverride = null;
+        var preview = defaultPreview;
+
+        for (var index = startIndex; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--json":
+                    json = true;
+                    break;
+                case "--model":
+                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+                    {
+                        return WriteProductOptionError(error, "--model requires a value.");
+                    }
+
+                    modelOverride = args[++index];
+                    break;
+                case "--concurrency":
+                    if (!allowConcurrency)
+                    {
+                        return WriteProductOptionError(error, "--concurrency is only supported by pick.");
+                    }
+
+                    if (index + 1 >= args.Length ||
+                        !int.TryParse(args[index + 1], out var concurrency) ||
+                        concurrency < 1)
+                    {
+                        return WriteProductOptionError(error, "--concurrency must be a positive integer.");
+                    }
+
+                    concurrencyOverride = concurrency;
+                    index++;
+                    break;
+                case "--quality":
+                    if (index + 1 >= args.Length ||
+                        !TryParsePreviewQuality(args[index + 1], out preview))
+                    {
+                        return WriteProductOptionError(error, "--quality must be fast, standard, high, or detail.");
+                    }
+
+                    index++;
+                    break;
+                case "--preview-edge":
+                    if (index + 1 >= args.Length ||
+                        !int.TryParse(args[index + 1], out var edge) ||
+                        edge < 256)
+                    {
+                        return WriteProductOptionError(error, "--preview-edge must be an integer >= 256.");
+                    }
+
+                    preview = preview with { MaxEdge = edge };
+                    index++;
+                    break;
+                case "--preview-jpeg-quality":
+                    if (index + 1 >= args.Length ||
+                        !int.TryParse(args[index + 1], out var quality) ||
+                        quality is < 1 or > 100)
+                    {
+                        return WriteProductOptionError(error, "--preview-jpeg-quality must be between 1 and 100.");
+                    }
+
+                    preview = preview with { JpegQuality = quality };
+                    index++;
+                    break;
+                default:
+                    return WriteProductOptionError(error, $"Unknown option: {args[index]}");
+            }
+        }
+
+        return new ProductCommandOptions(json, modelOverride, preview, concurrencyOverride);
+    }
+
+    private static ProductCommandOptions? WriteProductOptionError(TextWriter error, string message)
+    {
+        error.WriteLine(message);
+        return null;
+    }
+
+    private static bool TryParsePreviewQuality(string value, out PhotoPreviewOptions preview)
+    {
+        preview = value.ToLowerInvariant() switch
+        {
+            "fast" => PhotoPreviewOptions.Fast,
+            "standard" => PhotoPreviewOptions.Standard,
+            "high" => PhotoPreviewOptions.High,
+            "detail" => PhotoPreviewOptions.Detail,
+            _ => null!,
+        };
+
+        return preview is not null;
+    }
+
     private static int ProcessPendingJobs(
         ProjectDatabase database,
         long? projectId,
@@ -1074,7 +1317,10 @@ public static class CliApp
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient,
-        TextWriter? progressOutput)
+        TextWriter? progressOutput,
+        string? promptOverride = null,
+        PhotoPreviewOptions? preview = null,
+        int? concurrencyOverride = null)
     {
         var context = CreateRatingContext(null, modelOverride, error, secretStore, ratingClient);
         if (context is null)
@@ -1094,9 +1340,10 @@ public static class CliApp
             context.BaseUrl,
             context.ApiKey.Secret!,
             context.Profile,
-            BuildRatingPrompt(context.Profile),
+            BuildRatingPrompt(context.Profile, promptOverride),
             force,
-            context.Profile.Concurrency);
+            concurrencyOverride ?? context.Profile.Concurrency,
+            preview);
         var result = progressOutput is not null && ShouldUseLiveProgress(progressOutput, jobs.Count)
             ? ProcessPendingJobsWithLiveProgress(worker, database, jobs, options)
             : worker.ProcessPending(
@@ -1431,6 +1678,20 @@ public static class CliApp
                     latestRating.CreatedAt));
     }
 
+    private static ProductRatingJson? ToProductRatingJson(AiRating? rating)
+    {
+        return rating is null
+            ? null
+            : new ProductRatingJson(
+                rating.PhotoType,
+                rating.Score,
+                rating.Category,
+                rating.Criteria
+                    .Select(criterion => new RatingCriterionJson(criterion.Name, criterion.Score, criterion.Comment))
+                    .ToArray(),
+                rating.Reason);
+    }
+
     private static RatingCriterionJson[] ParseCriteriaJson(string criteriaJson)
     {
         try
@@ -1446,6 +1707,9 @@ public static class CliApp
     private static int WriteUsage(TextWriter error)
     {
         error.WriteLine("Usage:");
+        error.WriteLine("  photo-selector pick <directory> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--concurrency <n>] [--model <model>] [--json]");
+        error.WriteLine("  photo-selector rate <image> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--model <model>] [--json]");
+        error.WriteLine("  photo-selector coach <image> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--model <model>] [--json]");
         error.WriteLine("  photo-selector auth login --profile default --api-key-stdin");
         error.WriteLine("  photo-selector auth status --profile default");
         error.WriteLine("  photo-selector auth logout --profile default");
@@ -1486,6 +1750,19 @@ public static class CliApp
     private sealed record OpenJson(ProjectJson Project);
 
     private sealed record PhotosJson(long ProjectId, PhotoJson[] Photos);
+
+    private sealed record ProductDirectoryJson(
+        string Command,
+        ProjectScopeJson Project,
+        ScanSummaryJson Scan,
+        ProcessingJson Processing,
+        ResultsJson Results);
+
+    private sealed record SinglePhotoProductJson(
+        string Command,
+        string ImagePath,
+        ProductRatingJson? Rating,
+        string? Error);
 
     private sealed record ScanJson(
         ProjectScopeJson Project,
@@ -1540,6 +1817,18 @@ public static class CliApp
         IPhotoRatingClient Client,
         IPhotoRatingClient? OwnedClient);
 
+    private sealed record ProductCommandOptions(
+        bool Json,
+        string? ModelOverride,
+        PhotoPreviewOptions Preview,
+        int? ConcurrencyOverride);
+
+    private enum ProductCommandKind
+    {
+        Rate,
+        Coach,
+    }
+
     private sealed record ProjectScopeJson(long Id, string SourceDirectory);
 
     private sealed record JobSummaryJson(int Total, int Pending, int Completed, int Failed);
@@ -1562,6 +1851,13 @@ public static class CliApp
         string? Reason,
         string Status,
         string? Error);
+
+    private sealed record ProductRatingJson(
+        string PhotoType,
+        double Score,
+        string Category,
+        RatingCriterionJson[] Criteria,
+        string Reason);
 
     private sealed record ArenaRunJson(
         long Id,
@@ -1642,10 +1938,10 @@ public static class CliApp
 
     private sealed record RatingCriterionJson(string Name, double Score, string Comment);
 
-    private static string BuildRatingPrompt(AiProfile profile)
+    private static string BuildRatingPrompt(AiProfile profile, string? defaultPrompt = null)
     {
         var prompt = string.IsNullOrWhiteSpace(profile.Prompt)
-            ? DefaultPhotoRatingPrompt.Text
+            ? defaultPrompt ?? DefaultPhotoRatingPrompt.Text
             : profile.Prompt;
 
         return $"""

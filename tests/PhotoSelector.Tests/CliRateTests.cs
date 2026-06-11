@@ -669,6 +669,98 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Pick_rates_directory_with_selection_prompt_preview_quality_and_concurrency_override()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0001.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0002.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0003.JPG"), new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        Assert.Equal(0, CliApp.Run(["config", "set", "concurrency", "1"], TextWriter.Null, TextWriter.Null));
+        var secretStore = Login(new MemorySecretStore());
+        var client = new DelayedRatingClient(
+            new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate."));
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(
+            ["pick", sourceDirectory, "--quality", "standard", "--preview-jpeg-quality", "77", "--concurrency", "2"],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            client);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Equal(3, client.RequestCount);
+        Assert.Equal(2, client.MaxInFlight);
+        Assert.All(client.Requests, request =>
+        {
+            Assert.Contains("fast photo culling", request.Prompt);
+            Assert.NotNull(request.Preview);
+            Assert.Equal(1600, request.Preview!.MaxEdge);
+            Assert.Equal(77, request.Preview.JpegQuality);
+        });
+        Assert.Contains("Picked 3 photo(s)", output.ToString());
+        Assert.Contains("maybe: 3", output.ToString());
+    }
+
+    [Fact]
+    public void Rate_and_coach_accept_one_photo_with_high_quality_defaults()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                8.1,
+                "keep",
+                [new AiRatingCriterion("impact", 8.0, "Strong.")],
+                "Strong keeper."));
+
+        var rateOutput = new StringWriter();
+        var rateError = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["rate", jpegPath], rateOutput, rateError, TextReader.Null, secretStore, client));
+        Assert.Equal(string.Empty, rateError.ToString());
+        var rateRequest = Assert.Single(client.Requests);
+        Assert.Contains("detailed photographic critique", rateRequest.Prompt);
+        Assert.NotNull(rateRequest.Preview);
+        Assert.Equal(2048, rateRequest.Preview!.MaxEdge);
+        Assert.Equal(90, rateRequest.Preview.JpegQuality);
+        Assert.Contains("8.1 keep", rateOutput.ToString());
+
+        client.Requests.Clear();
+        var coachOutput = new StringWriter();
+        var coachError = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["coach", jpegPath, "--quality", "detail"], coachOutput, coachError, TextReader.Null, secretStore, client));
+        Assert.Equal(string.Empty, coachError.ToString());
+        var coachRequest = Assert.Single(client.Requests);
+        Assert.Contains("photography coach", coachRequest.Prompt);
+        Assert.NotNull(coachRequest.Preview);
+        Assert.Equal(3072, coachRequest.Preview!.MaxEdge);
+        Assert.Equal(92, coachRequest.Preview.JpegQuality);
+
+        var directoryError = new StringWriter();
+        Assert.Equal(1, CliApp.Run(["rate", sourceDirectory], TextWriter.Null, directoryError, TextReader.Null, secretStore, client));
+        Assert.Contains("requires one image file", directoryError.ToString());
+    }
+
+    [Fact]
     public void Arena_rates_limited_photos_with_multiple_models_without_saving_primary_ratings()
     {
         using var tempDirectory = new TempDirectory();
@@ -919,6 +1011,9 @@ public sealed class CliRateTests
         private int inFlight;
         private int maxInFlight;
         private int requestCount;
+        private readonly object requestsLock = new();
+
+        public List<PhotoRatingRequest> Requests { get; } = [];
 
         public int MaxInFlight => maxInFlight;
 
@@ -926,6 +1021,11 @@ public sealed class CliRateTests
 
         public async Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
         {
+            lock (requestsLock)
+            {
+                Requests.Add(request);
+            }
+
             Interlocked.Increment(ref requestCount);
             var current = Interlocked.Increment(ref inFlight);
             while (true)
