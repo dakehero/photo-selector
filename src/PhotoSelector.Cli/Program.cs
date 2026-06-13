@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.CommandLine;
+using System.CommandLine.Invocation;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PhotoSelector.Agent.Workers;
@@ -45,30 +47,90 @@ public static partial class CliApp
 
         try
         {
-            return args[0] switch
+            if (!IsKnownTopLevelCommand(args[0]))
             {
-                "help" or "--help" or "-h" => RunHelp(args, output, error),
-                "auth" => RunAuth(args, output, error, input, secretStore),
-                "config" => RunConfig(args, output, error),
-                "pick" => RunPick(args, output, error, secretStore, ratingClient),
-                "rate" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate),
-                "coach" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach),
-                "arena" => RunArena(args, output, error, secretStore, ratingClient),
-                "scan" => RunScan(args, output, error, secretStore, ratingClient),
-                "status" => RunStatus(args, output, error),
-                "reset" => RunReset(args, output, error),
-                "results" => RunResults(args, output, error),
-                "export" => RunExport(args, output, error),
-                "projects" => RunProjects(args, output, error),
-                "open" => RunOpen(args, output, error),
-                "photos" => RunPhotos(args, output, error),
-                _ => WriteUsage(error),
-            };
+                return WriteUsage(error);
+            }
+
+            var root = BuildCommandLine(args, output, error, input, secretStore, ratingClient);
+            var parseResult = root.Parse(args);
+            return parseResult.Invoke(new InvocationConfiguration
+            {
+                Output = output,
+                Error = error,
+            });
         }
         catch (Exception ex)
         {
             error.WriteLine(ex.Message);
             return 1;
+        }
+    }
+
+    private static RootCommand BuildCommandLine(
+        string[] args,
+        TextWriter output,
+        TextWriter error,
+        TextReader input,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var root = new RootCommand("Photo Selector");
+        root.Action = new RelayAction(_ => WriteUsage(error));
+        root.Subcommands.Add(CreateRelayCommand("help", _ => RunHelp(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("auth", _ => RunAuth(args, output, error, input, secretStore), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("config", _ => RunConfig(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("pick", _ => RunPick(args, output, error, secretStore, ratingClient), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("rate", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("coach", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("arena", _ => RunArena(args, output, error, secretStore, ratingClient), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("scan", _ => RunScan(args, output, error, secretStore, ratingClient), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("status", _ => RunStatus(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("reset", _ => RunReset(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("results", _ => RunResults(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("export", _ => RunExport(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("projects", _ => RunProjects(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("open", _ => RunOpen(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(CreateRelayCommand("photos", _ => RunPhotos(args, output, error), allowUnmatched: true));
+        return root;
+    }
+
+    private static bool IsKnownTopLevelCommand(string command)
+    {
+        return command is
+            "help" or "--help" or "-h" or
+            "auth" or
+            "config" or
+            "pick" or
+            "rate" or
+            "coach" or
+            "arena" or
+            "scan" or
+            "status" or
+            "reset" or
+            "results" or
+            "export" or
+            "projects" or
+            "open" or
+            "photos";
+    }
+
+    private static Command CreateRelayCommand(
+        string name,
+        Func<ParseResult, int> action,
+        bool allowUnmatched = false)
+    {
+        var command = new Command(name);
+        command.TreatUnmatchedTokensAsErrors = !allowUnmatched;
+        command.Action = new RelayAction(action);
+        return command;
+    }
+
+    private sealed class RelayAction(Func<ParseResult, int> action) : SynchronousCommandLineAction
+    {
+        public override int Invoke(ParseResult parseResult)
+        {
+            return action(parseResult);
         }
     }
 
