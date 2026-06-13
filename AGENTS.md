@@ -100,3 +100,7 @@ Worker implementation detail:
 - Keep raw audit paths covered by tests, especially secret and image redaction.
 - Prefer small provider-specific adapters over branching deeply inside CLI commands.
 - Run `dotnet test` before claiming completion.
+
+## Planning Rules
+
+- Do not create or maintain a root `TODO.md`. Track follow-up work in Superpowers specs and plans under `docs/superpowers/`.

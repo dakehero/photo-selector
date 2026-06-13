@@ -613,6 +613,6 @@ git commit -m "feat: wire app scan workflow"
 ## Self-Review Checklist
 
 - Spec coverage: scanning, JPG+RAW pairing, shared SQLite catalog, rating jobs, Agent workflows, CLI, Avalonia workbench, AI providers, and AI JSON parsing are covered.
-- Known gaps for the next work cycle are tracked in `TODO.md`: catalog-first `audit`, clearer `status`, worker lease/running state, retry policy, and installed CLI command path.
+- Known gaps for follow-up work should be tracked in Superpowers specs/plans under `docs/superpowers/`, not in a root `TODO.md`.
 - Placeholder scan: no `TBD` or unspecified implementation placeholders are intended.
 - Type consistency: `PhotoPair`, `PhotoItem`, `ProjectDatabase`, `RatingJob`, `ImportWorkflow`, `RatingWorker`, `ExportService`, and `AiRatingParser` names are used consistently across tasks.

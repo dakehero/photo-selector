@@ -19,7 +19,7 @@
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
 - Rating work is invoked through `pick`, `scan`, `rate`, `coach`, or `arena`, not a user-facing `process` or `rate <db>` command.
-- Audit product commands are not wired yet; keep their remaining work in the root TODO list instead of shipping temporary database-path commands.
+- Audit product commands are not wired yet; track remaining design work in Superpowers specs/plans instead of shipping temporary database-path commands.
 
 ## Dependencies
 
