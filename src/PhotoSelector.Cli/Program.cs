@@ -80,9 +80,9 @@ public static partial class CliApp
         root.Subcommands.Add(CreateRelayCommand("help", _ => RunHelp(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(BuildAuthCommand(output, error, input, secretStore));
         root.Subcommands.Add(BuildConfigCommand(output, error));
-        root.Subcommands.Add(CreateRelayCommand("pick", _ => RunPick(args, output, error, secretStore, ratingClient), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("rate", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("coach", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach), allowUnmatched: true));
+        root.Subcommands.Add(BuildPickCommand(output, error, secretStore, ratingClient));
+        root.Subcommands.Add(BuildSinglePhotoProductCommand("rate", ProductCommandKind.Rate, output, error, secretStore, ratingClient));
+        root.Subcommands.Add(BuildSinglePhotoProductCommand("coach", ProductCommandKind.Coach, output, error, secretStore, ratingClient));
         root.Subcommands.Add(CreateRelayCommand("arena", _ => RunArena(args, output, error, secretStore, ratingClient), allowUnmatched: true));
         root.Subcommands.Add(BuildScanCommand(output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildStatusCommand(output, error));
@@ -274,25 +274,61 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunPick(
-        string[] args,
+    private static Command BuildPickCommand(
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length < 2)
+        var command = new Command("pick", "Pick the strongest photos in a directory.");
+        var directoryArgument = new Argument<string>("directory");
+        var jsonOption = new Option<bool>("--json");
+        var modelOption = new Option<string?>("--model");
+        var qualityOption = new Option<string?>("--quality");
+        var previewEdgeOption = new Option<int?>("--preview-edge");
+        var previewJpegQualityOption = new Option<int?>("--preview-jpeg-quality");
+        var concurrencyOption = new Option<int?>("--concurrency");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(jsonOption);
+        command.Options.Add(modelOption);
+        command.Options.Add(qualityOption);
+        command.Options.Add(previewEdgeOption);
+        command.Options.Add(previewJpegQualityOption);
+        command.Options.Add(concurrencyOption);
+        command.SetAction(parseResult =>
         {
-            return WriteUsage(error);
-        }
+            var options = BuildProductCommandOptions(
+                parseResult.GetValue(jsonOption),
+                parseResult.GetValue(modelOption),
+                parseResult.GetValue(qualityOption),
+                parseResult.GetValue(previewEdgeOption),
+                parseResult.GetValue(previewJpegQualityOption),
+                parseResult.GetValue(concurrencyOption),
+                PhotoPreviewOptions.Fast,
+                allowConcurrency: true,
+                error);
+            return options is null
+                ? 1
+                : RunPick(
+                    parseResult.GetRequiredValue(directoryArgument),
+                    options,
+                    output,
+                    error,
+                    secretStore,
+                    ratingClient);
+        });
+        return command;
+    }
 
-        var options = ParseProductCommandOptions(args, 2, PhotoPreviewOptions.Fast, allowConcurrency: true, error);
-        if (options is null)
-        {
-            return 1;
-        }
-
-        var result = ImportDirectory(args[1], error);
+    private static int RunPick(
+        string directory,
+        ProductCommandOptions options,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var result = ImportDirectory(directory, error);
         if (result is null)
         {
             return 1;
@@ -343,30 +379,67 @@ public static partial class CliApp
         return processing.Failed == 0 ? 0 : 1;
     }
 
+    private static Command BuildSinglePhotoProductCommand(
+        string commandName,
+        ProductCommandKind kind,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var command = new Command(commandName, commandName == "rate" ? "Rate one photo." : "Coach one photo.");
+        var imageArgument = new Argument<string>("image");
+        var jsonOption = new Option<bool>("--json");
+        var modelOption = new Option<string?>("--model");
+        var qualityOption = new Option<string?>("--quality");
+        var previewEdgeOption = new Option<int?>("--preview-edge");
+        var previewJpegQualityOption = new Option<int?>("--preview-jpeg-quality");
+        command.Arguments.Add(imageArgument);
+        command.Options.Add(jsonOption);
+        command.Options.Add(modelOption);
+        command.Options.Add(qualityOption);
+        command.Options.Add(previewEdgeOption);
+        command.Options.Add(previewJpegQualityOption);
+        command.SetAction(parseResult =>
+        {
+            var options = BuildProductCommandOptions(
+                parseResult.GetValue(jsonOption),
+                parseResult.GetValue(modelOption),
+                parseResult.GetValue(qualityOption),
+                parseResult.GetValue(previewEdgeOption),
+                parseResult.GetValue(previewJpegQualityOption),
+                null,
+                PhotoPreviewOptions.High,
+                allowConcurrency: false,
+                error);
+            return options is null
+                ? 1
+                : RunSinglePhotoProductCommand(
+                    parseResult.GetRequiredValue(imageArgument),
+                    options,
+                    output,
+                    error,
+                    secretStore,
+                    ratingClient,
+                    kind);
+        });
+        return command;
+    }
+
     private static int RunSinglePhotoProductCommand(
-        string[] args,
+        string image,
+        ProductCommandOptions options,
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient,
         ProductCommandKind kind)
     {
-        if (args.Length < 2)
-        {
-            return WriteUsage(error);
-        }
-
         var commandName = kind == ProductCommandKind.Rate ? "rate" : "coach";
-        var imagePath = Path.GetFullPath(args[1]);
+        var imagePath = Path.GetFullPath(image);
         if (Directory.Exists(imagePath) || !File.Exists(imagePath))
         {
             error.WriteLine($"{commandName} requires one image file.");
-            return 1;
-        }
-
-        var options = ParseProductCommandOptions(args, 2, PhotoPreviewOptions.High, allowConcurrency: false, error);
-        if (options is null)
-        {
             return 1;
         }
 
@@ -1177,83 +1250,52 @@ public static partial class CliApp
             string.Equals(value, "reject", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ProductCommandOptions? ParseProductCommandOptions(
-        string[] args,
-        int startIndex,
+    private static ProductCommandOptions? BuildProductCommandOptions(
+        bool json,
+        string? modelOverride,
+        string? quality,
+        int? previewEdge,
+        int? previewJpegQuality,
+        int? concurrencyOverride,
         PhotoPreviewOptions defaultPreview,
         bool allowConcurrency,
         TextWriter error)
     {
-        var json = false;
-        string? modelOverride = null;
-        int? concurrencyOverride = null;
         var preview = defaultPreview;
 
-        for (var index = startIndex; index < args.Length; index++)
+        if (!allowConcurrency && concurrencyOverride is not null)
         {
-            switch (args[index])
+            return WriteProductOptionError(error, "--concurrency is only supported by pick.");
+        }
+
+        if (concurrencyOverride is not null && concurrencyOverride < 1)
+        {
+            return WriteProductOptionError(error, "--concurrency must be a positive integer.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(quality) && !TryParsePreviewQuality(quality, out preview))
+        {
+            return WriteProductOptionError(error, "--quality must be fast, standard, high, or detail.");
+        }
+
+        if (previewEdge is not null)
+        {
+            if (previewEdge < 256)
             {
-                case "--json":
-                    json = true;
-                    break;
-                case "--model":
-                    if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
-                    {
-                        return WriteProductOptionError(error, "--model requires a value.");
-                    }
-
-                    modelOverride = args[++index];
-                    break;
-                case "--concurrency":
-                    if (!allowConcurrency)
-                    {
-                        return WriteProductOptionError(error, "--concurrency is only supported by pick.");
-                    }
-
-                    if (index + 1 >= args.Length ||
-                        !int.TryParse(args[index + 1], out var concurrency) ||
-                        concurrency < 1)
-                    {
-                        return WriteProductOptionError(error, "--concurrency must be a positive integer.");
-                    }
-
-                    concurrencyOverride = concurrency;
-                    index++;
-                    break;
-                case "--quality":
-                    if (index + 1 >= args.Length ||
-                        !TryParsePreviewQuality(args[index + 1], out preview))
-                    {
-                        return WriteProductOptionError(error, "--quality must be fast, standard, high, or detail.");
-                    }
-
-                    index++;
-                    break;
-                case "--preview-edge":
-                    if (index + 1 >= args.Length ||
-                        !int.TryParse(args[index + 1], out var edge) ||
-                        edge < 256)
-                    {
-                        return WriteProductOptionError(error, "--preview-edge must be an integer >= 256.");
-                    }
-
-                    preview = preview with { MaxEdge = edge };
-                    index++;
-                    break;
-                case "--preview-jpeg-quality":
-                    if (index + 1 >= args.Length ||
-                        !int.TryParse(args[index + 1], out var quality) ||
-                        quality is < 1 or > 100)
-                    {
-                        return WriteProductOptionError(error, "--preview-jpeg-quality must be between 1 and 100.");
-                    }
-
-                    preview = preview with { JpegQuality = quality };
-                    index++;
-                    break;
-                default:
-                    return WriteProductOptionError(error, $"Unknown option: {args[index]}");
+                return WriteProductOptionError(error, "--preview-edge must be an integer >= 256.");
             }
+
+            preview = preview with { MaxEdge = previewEdge.Value };
+        }
+
+        if (previewJpegQuality is not null)
+        {
+            if (previewJpegQuality is < 1 or > 100)
+            {
+                return WriteProductOptionError(error, "--preview-jpeg-quality must be between 1 and 100.");
+            }
+
+            preview = preview with { JpegQuality = previewJpegQuality.Value };
         }
 
         return new ProductCommandOptions(json, modelOverride, preview, concurrencyOverride);
