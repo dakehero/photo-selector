@@ -89,9 +89,9 @@ public static partial class CliApp
         root.Subcommands.Add(CreateRelayCommand("reset", _ => RunReset(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("results", _ => RunResults(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("export", _ => RunExport(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("projects", _ => RunProjects(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("open", _ => RunOpen(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("photos", _ => RunPhotos(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(BuildProjectsCommand(output, error));
+        root.Subcommands.Add(BuildOpenCommand(output, error));
+        root.Subcommands.Add(BuildPhotosCommand(output, error));
         return root;
     }
 
@@ -1347,9 +1347,24 @@ public static partial class CliApp
         return $"rating {progress.Current}/{progress.Total}: {progress.Label}";
     }
 
-    private static int RunProjects(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildProjectsCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length != 3 || args[1] != "list" || args[2] != "--json")
+        var command = new Command("projects", "Query indexed projects.");
+        command.Action = new RelayAction(_ => WriteUsage(error));
+
+        var list = new Command("list", "List indexed projects.");
+        var jsonOption = new Option<bool>("--json");
+        list.Options.Add(jsonOption);
+        list.SetAction(parseResult =>
+            RunProjectsList(parseResult.GetValue(jsonOption), output, error));
+        command.Subcommands.Add(list);
+
+        return command;
+    }
+
+    private static int RunProjectsList(bool json, TextWriter output, TextWriter error)
+    {
+        if (!json)
         {
             return WriteUsage(error);
         }
@@ -1369,18 +1384,34 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunOpen(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildOpenCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length != 3 || args[2] != "--json")
+        var command = new Command("open", "Open a project context.");
+        var selectorArgument = new Argument<string>("project-id|directory");
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(selectorArgument);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunOpen(
+                parseResult.GetRequiredValue(selectorArgument),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
+
+    private static int RunOpen(string selector, bool json, TextWriter output, TextWriter error)
+    {
+        if (!json)
         {
             return WriteUsage(error);
         }
 
         using var database = OpenCatalogDatabase();
-        var project = FindProject(database, args[1]);
+        var project = FindProject(database, selector);
         if (project is null)
         {
-            error.WriteLine($"Project not found: {args[1]}");
+            error.WriteLine($"Project not found: {selector}");
             return 1;
         }
 
@@ -1388,17 +1419,38 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunPhotos(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildPhotosCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length != 5 ||
-            args[1] != "list" ||
-            args[2] != "--project" ||
-            args[4] != "--json")
+        var command = new Command("photos", "Query project photos.");
+        command.Action = new RelayAction(_ => WriteUsage(error));
+
+        var list = new Command("list", "List photos for one indexed project.");
+        var projectOption = new Option<long>("--project")
+        {
+            Required = true,
+        };
+        var jsonOption = new Option<bool>("--json");
+        list.Options.Add(projectOption);
+        list.Options.Add(jsonOption);
+        list.SetAction(parseResult =>
+            RunPhotosList(
+                parseResult.GetRequiredValue(projectOption),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        command.Subcommands.Add(list);
+
+        return command;
+    }
+
+    private static int RunPhotosList(long projectId, bool json, TextWriter output, TextWriter error)
+    {
+        if (!json)
         {
             return WriteUsage(error);
         }
 
-        if (!long.TryParse(args[3], out var projectId) || projectId < 1)
+        if (projectId < 1)
         {
             error.WriteLine("project id must be a positive integer.");
             return 1;
