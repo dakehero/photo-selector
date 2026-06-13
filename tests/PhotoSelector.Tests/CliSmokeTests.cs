@@ -106,6 +106,77 @@ public sealed class CliSmokeTests
         }
     }
 
+    [Fact]
+    public void Help_outputs_human_friendly_command_overview()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["help"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains("Photo Selector", output.ToString());
+        Assert.Contains("photo-selector pick <directory>", output.ToString());
+        Assert.Contains("photo-selector help --json", output.ToString());
+        Assert.DoesNotContain("photo-selector import", output.ToString());
+        Assert.DoesNotContain("photo-selector process", output.ToString());
+        Assert.DoesNotContain("photo-selector flush", output.ToString());
+    }
+
+    [Fact]
+    public void Help_json_outputs_machine_readable_command_schema()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["help", "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("photo-selector", document.RootElement.GetProperty("name").GetString());
+        var commands = document.RootElement.GetProperty("commands").EnumerateArray().ToArray();
+        var pick = commands.Single(command => command.GetProperty("name").GetString() == "pick");
+        Assert.Equal("photo-selector pick <directory>", pick.GetProperty("usage").GetString());
+        Assert.True(pick.GetProperty("output").GetProperty("json").GetBoolean());
+        Assert.Equal("directory", pick.GetProperty("arguments")[0].GetProperty("kind").GetString());
+        Assert.Contains(commands, command => command.GetProperty("name").GetString() == "projects list");
+        Assert.DoesNotContain(commands, command => command.GetProperty("name").GetString() == "process");
+    }
+
+    [Fact]
+    public void Help_command_json_outputs_one_command_schema()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["help", "pick", "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("pick", document.RootElement.GetProperty("name").GetString());
+        Assert.Contains(
+            document.RootElement.GetProperty("options").EnumerateArray(),
+            option => option.GetProperty("name").GetString() == "--concurrency");
+    }
+
+    [Fact]
+    public void Help_unknown_command_returns_usage_error()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["help", "process"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Contains("Unknown command: process", error.ToString());
+        Assert.Contains("Usage:", error.ToString());
+        Assert.DoesNotContain("photo-selector process", error.ToString());
+    }
+
     private static MemorySecretStore Login(MemorySecretStore secretStore)
     {
         Assert.Equal(

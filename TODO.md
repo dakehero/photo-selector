@@ -19,3 +19,4 @@
 - Added `results [directory]` to summarize keep/maybe/reject, rating coverage, and top candidates.
 - Added catalog-first `export <keep|maybe|reject> <directory> <target>` without exposing SQLite paths.
 - Removed unused top-level `import`, `process`, and `flush` commands from the CLI surface.
+- Added `help` and `help --json` as the shared human/agent command discovery layer.

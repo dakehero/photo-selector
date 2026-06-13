@@ -47,6 +47,7 @@ public static partial class CliApp
         {
             return args[0] switch
             {
+                "help" or "--help" or "-h" => RunHelp(args, output, error),
                 "auth" => RunAuth(args, output, error, input, secretStore),
                 "config" => RunConfig(args, output, error),
                 "pick" => RunPick(args, output, error, secretStore, ratingClient),
@@ -69,6 +70,57 @@ public static partial class CliApp
             error.WriteLine(ex.Message);
             return 1;
         }
+    }
+
+    private static int RunHelp(string[] args, TextWriter output, TextWriter error)
+    {
+        var json = false;
+        var selectorParts = new List<string>();
+        for (var index = 1; index < args.Length; index++)
+        {
+            if (args[index] == "--json")
+            {
+                json = true;
+                continue;
+            }
+
+            selectorParts.Add(args[index]);
+        }
+
+        if (selectorParts.Count == 0)
+        {
+            if (json)
+            {
+                output.WriteLine(JsonSerializer.Serialize(
+                    new HelpCatalogJson("photo-selector", "0.1", HelpCommands),
+                    CliJsonContext.Default.HelpCatalogJson));
+            }
+            else
+            {
+                WriteHelpOverview(output);
+            }
+
+            return 0;
+        }
+
+        var selector = string.Join(' ', selectorParts);
+        var command = FindHelpCommand(selector);
+        if (command is null)
+        {
+            error.WriteLine($"Unknown command: {selector}");
+            return WriteUsage(error);
+        }
+
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(command, CliJsonContext.Default.HelpCommandJson));
+        }
+        else
+        {
+            WriteCommandHelp(command, output);
+        }
+
+        return 0;
     }
 
     private static int RunConfig(string[] args, TextWriter output, TextWriter error)
@@ -1523,28 +1575,268 @@ public static partial class CliApp
         }
     }
 
+    private static readonly HelpOptionJson JsonOption = new("--json", "boolean", false, [], "Emit machine-readable JSON.");
+
+    private static readonly HelpOptionJson ModelOption = new("--model", "string", false, [], "Override the configured model for this invocation.");
+
+    private static readonly HelpCommandJson[] HelpCommands =
+    [
+        new(
+            "help",
+            "photo-selector help [command] [--json]",
+            "Show human or machine-readable command help.",
+            [new HelpArgumentJson("command", false, "string", "command", "Command name, such as pick or projects list.")],
+            [JsonOption],
+            new HelpOutputJson(true, true, "Human overview or command schema."),
+            ["photo-selector help --json", "photo-selector help pick --json"]),
+        new(
+            "pick",
+            "photo-selector pick <directory>",
+            "Select best photos from a directory using the selection prompt.",
+            [new HelpArgumentJson("directory", true, "path", "directory", "Directory containing JPEG and optional RAW pairs.")],
+            [
+                new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
+                new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
+                new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
+                new HelpOptionJson("--concurrency", "integer", false, [], "Override concurrent AI requests for this run."),
+                ModelOption,
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Directory processing summary and ranked photo results."),
+            ["photo-selector pick \"C:\\Photos\\Shoot\" --json", "photo-selector pick \"C:\\Photos\\Shoot\" --concurrency 2"]),
+        new(
+            "rate",
+            "photo-selector rate <image>",
+            "Rate one photo with the detailed critique prompt.",
+            [new HelpArgumentJson("image", true, "path", "file", "JPEG or readable image file.")],
+            [
+                new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
+                new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
+                new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
+                ModelOption,
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Single-photo rating result."),
+            ["photo-selector rate \"C:\\Photos\\Shoot\\DSC_0001.JPG\" --json"]),
+        new(
+            "coach",
+            "photo-selector coach <image>",
+            "Give practical coaching advice for one photo.",
+            [new HelpArgumentJson("image", true, "path", "file", "JPEG or readable image file.")],
+            [
+                new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
+                new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
+                new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
+                ModelOption,
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Single-photo coaching result."),
+            ["photo-selector coach \"C:\\Photos\\Shoot\\DSC_0001.JPG\""]),
+        new(
+            "arena",
+            "photo-selector arena <directory> --models <model1,model2>",
+            "Compare multiple models on photos from one directory.",
+            [
+                new HelpArgumentJson("directory", true, "path", "directory", "Directory containing photos."),
+            ],
+            [
+                new HelpOptionJson("--models", "string", true, [], "Comma-separated model names."),
+                new HelpOptionJson("--limit", "integer", false, [], "Limit the number of photos evaluated."),
+            ],
+            new HelpOutputJson(true, false, "Arena run summary."),
+            ["photo-selector arena \"C:\\Photos\\Shoot\" --models model-a,model-b --limit 5"]),
+        new(
+            "arena list",
+            "photo-selector arena list [directory] [--json]",
+            "List saved arena runs.",
+            [new HelpArgumentJson("directory", false, "path", "directory", "Optional project directory filter.")],
+            [JsonOption],
+            new HelpOutputJson(true, true, "Arena run list."),
+            ["photo-selector arena list --json"]),
+        new(
+            "arena show",
+            "photo-selector arena show <run-id> [--json]",
+            "Show one saved arena run with model comparisons.",
+            [new HelpArgumentJson("run-id", true, "integer", "id", "Arena run id.")],
+            [JsonOption],
+            new HelpOutputJson(true, true, "Arena run detail."),
+            ["photo-selector arena show 1 --json"]),
+        new(
+            "scan",
+            "photo-selector scan <directory>",
+            "Synchronously index and rate a directory with the default rating prompt.",
+            [new HelpArgumentJson("directory", true, "path", "directory", "Directory containing JPEG and optional RAW pairs.")],
+            [ModelOption, JsonOption],
+            new HelpOutputJson(true, true, "Directory processing summary and rating results."),
+            ["photo-selector scan \"C:\\Photos\\Shoot\" --json"]),
+        new(
+            "status",
+            "photo-selector status [directory]",
+            "Show catalog job and rating status.",
+            [new HelpArgumentJson("directory", false, "path", "directory", "Optional project directory filter.")],
+            [JsonOption],
+            new HelpOutputJson(true, true, "Job summary and rated count."),
+            ["photo-selector status --json"]),
+        new(
+            "reset ratings",
+            "photo-selector reset ratings <directory>",
+            "Remove saved ratings for a directory so the next pick or scan can evaluate it again.",
+            [new HelpArgumentJson("directory", true, "path", "directory", "Project directory.")],
+            [new HelpOptionJson("--with-audit", "boolean", false, [], "Also delete audit logs.")],
+            new HelpOutputJson(true, false, "Reset summary."),
+            ["photo-selector reset ratings \"C:\\Photos\\Shoot\""]),
+        new(
+            "results",
+            "photo-selector results [directory]",
+            "Show saved rating coverage, top candidates, and all ranked results.",
+            [new HelpArgumentJson("directory", false, "path", "directory", "Optional project directory filter.")],
+            [JsonOption],
+            new HelpOutputJson(true, true, "Rating results summary."),
+            ["photo-selector results \"C:\\Photos\\Shoot\" --json"]),
+        new(
+            "export",
+            "photo-selector export <keep|maybe|reject> <directory> <target>",
+            "Copy selected JPEG and RAW pairs into a timestamped export directory.",
+            [
+                new HelpArgumentJson("category", true, "string", "enum", "Rating category to export."),
+                new HelpArgumentJson("directory", true, "path", "directory", "Project directory."),
+                new HelpArgumentJson("target", true, "path", "directory", "Export parent directory."),
+            ],
+            [],
+            new HelpOutputJson(true, false, "Export summary."),
+            ["photo-selector export keep \"C:\\Photos\\Shoot\" \"C:\\Photos\\Selected\""]),
+        new(
+            "projects list",
+            "photo-selector projects list --json",
+            "List indexed projects for agent/API callers.",
+            [],
+            [JsonOption],
+            new HelpOutputJson(false, true, "Project list."),
+            ["photo-selector projects list --json"]),
+        new(
+            "open",
+            "photo-selector open <project-id|directory> --json",
+            "Open one project context by id or directory.",
+            [new HelpArgumentJson("project-id|directory", true, "string", "selector", "Project id or source directory.")],
+            [JsonOption],
+            new HelpOutputJson(false, true, "Project detail with photos."),
+            ["photo-selector open \"C:\\Photos\\Shoot\" --json"]),
+        new(
+            "photos list",
+            "photo-selector photos list --project <project-id> --json",
+            "List photos for one project.",
+            [],
+            [
+                new HelpOptionJson("--project", "integer", true, [], "Project id."),
+                JsonOption,
+            ],
+            new HelpOutputJson(false, true, "Photo list."),
+            ["photo-selector photos list --project 1 --json"]),
+        new(
+            "auth login",
+            "photo-selector auth login --profile default --api-key-stdin",
+            "Store an API key in the configured secret provider.",
+            [],
+            [
+                new HelpOptionJson("--profile", "string", true, [], "Profile name."),
+                new HelpOptionJson("--api-key-stdin", "boolean", true, [], "Read API key from stdin."),
+            ],
+            new HelpOutputJson(true, false, "Authentication summary."),
+            ["Get-Content key.txt | photo-selector auth login --profile default --api-key-stdin"]),
+        new(
+            "auth status",
+            "photo-selector auth status --profile default",
+            "Show configured secret reference availability.",
+            [],
+            [new HelpOptionJson("--profile", "string", true, [], "Profile name.")],
+            new HelpOutputJson(true, false, "Auth status."),
+            ["photo-selector auth status --profile default"]),
+        new(
+            "auth logout",
+            "photo-selector auth logout --profile default",
+            "Remove the stored API key for a profile.",
+            [],
+            [new HelpOptionJson("--profile", "string", true, [], "Profile name.")],
+            new HelpOutputJson(true, false, "Logout summary."),
+            ["photo-selector auth logout --profile default"]),
+        new(
+            "config set",
+            "photo-selector config set <key> <value>",
+            "Set provider, endpoint, model, API key env, prompt, output language, or concurrency.",
+            [
+                new HelpArgumentJson("key", true, "string", "enum", "provider, base_url, model, api_key_env, prompt, output_language, or concurrency."),
+                new HelpArgumentJson("value", true, "string", "value", "Configuration value."),
+            ],
+            [],
+            new HelpOutputJson(true, false, "Config update summary."),
+            ["photo-selector config set model qwen/qwen3-vl-plus"]),
+        new(
+            "config list",
+            "photo-selector config list",
+            "Show active provider configuration without revealing API keys.",
+            [],
+            [],
+            new HelpOutputJson(true, false, "Config summary."),
+            ["photo-selector config list"]),
+    ];
+
+    private static HelpCommandJson? FindHelpCommand(string selector)
+    {
+        return HelpCommands.FirstOrDefault(command =>
+            string.Equals(command.Name, selector, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void WriteHelpOverview(TextWriter output)
+    {
+        output.WriteLine("Photo Selector");
+        output.WriteLine();
+        output.WriteLine("Usage:");
+        foreach (var command in HelpCommands)
+        {
+            output.WriteLine($"  {command.Usage}");
+        }
+
+        output.WriteLine();
+        output.WriteLine("Agent/API:");
+        output.WriteLine("  photo-selector help --json");
+        output.WriteLine("  photo-selector help <command> --json");
+    }
+
+    private static void WriteCommandHelp(HelpCommandJson command, TextWriter output)
+    {
+        output.WriteLine(command.Usage);
+        output.WriteLine(command.Summary);
+        if (command.Arguments.Length > 0)
+        {
+            output.WriteLine("Arguments:");
+            foreach (var argument in command.Arguments)
+            {
+                output.WriteLine($"  {argument.Name}: {argument.Description}");
+            }
+        }
+
+        if (command.Options.Length > 0)
+        {
+            output.WriteLine("Options:");
+            foreach (var option in command.Options)
+            {
+                output.WriteLine($"  {option.Name}: {option.Description}");
+            }
+        }
+
+        if (command.Examples.Length > 0)
+        {
+            output.WriteLine("Examples:");
+            foreach (var example in command.Examples)
+            {
+                output.WriteLine($"  {example}");
+            }
+        }
+    }
+
     private static int WriteUsage(TextWriter error)
     {
-        error.WriteLine("Usage:");
-        error.WriteLine("  photo-selector pick <directory> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--concurrency <n>] [--model <model>] [--json]");
-        error.WriteLine("  photo-selector rate <image> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--model <model>] [--json]");
-        error.WriteLine("  photo-selector coach <image> [--quality <fast|standard|high|detail>] [--preview-edge <n>] [--preview-jpeg-quality <1-100>] [--model <model>] [--json]");
-        error.WriteLine("  photo-selector auth login --profile default --api-key-stdin");
-        error.WriteLine("  photo-selector auth status --profile default");
-        error.WriteLine("  photo-selector auth logout --profile default");
-        error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|prompt|output_language|concurrency> <value>");
-        error.WriteLine("  photo-selector config list");
-        error.WriteLine("  photo-selector arena <directory> --models <model1,model2> [--limit <n>]");
-        error.WriteLine("  photo-selector arena list [directory] [--json]");
-        error.WriteLine("  photo-selector arena show <run-id> [--json]");
-        error.WriteLine("  photo-selector scan <directory> [--model <model>] [--json]");
-        error.WriteLine("  photo-selector status [directory] [--json]");
-        error.WriteLine("  photo-selector reset ratings <directory> [--with-audit]");
-        error.WriteLine("  photo-selector results [directory] [--json]");
-        error.WriteLine("  photo-selector export <keep|maybe|reject> <directory> <target>");
-        error.WriteLine("  photo-selector projects list --json");
-        error.WriteLine("  photo-selector open <project-id|directory> --json");
-        error.WriteLine("  photo-selector photos list --project <project-id> --json");
+        WriteHelpOverview(error);
         return 1;
     }
 
@@ -1572,8 +1864,43 @@ public static partial class CliApp
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
     [JsonSerializable(typeof(ArenaShowJson))]
+    [JsonSerializable(typeof(HelpCatalogJson))]
+    [JsonSerializable(typeof(HelpCommandJson))]
     [JsonSerializable(typeof(RatingCriterionJson[]))]
     private sealed partial class CliJsonContext : JsonSerializerContext;
+
+    private sealed record HelpCatalogJson(
+        string Name,
+        string Version,
+        HelpCommandJson[] Commands);
+
+    private sealed record HelpCommandJson(
+        string Name,
+        string Usage,
+        string Summary,
+        HelpArgumentJson[] Arguments,
+        HelpOptionJson[] Options,
+        HelpOutputJson Output,
+        string[] Examples);
+
+    private sealed record HelpArgumentJson(
+        string Name,
+        bool Required,
+        string Type,
+        string Kind,
+        string Description);
+
+    private sealed record HelpOptionJson(
+        string Name,
+        string Type,
+        bool Required,
+        string[] Values,
+        string Description);
+
+    private sealed record HelpOutputJson(
+        bool Text,
+        bool Json,
+        string Contract);
 
     private sealed record ProjectsJson(ProjectSummaryJson[] Projects);
 
