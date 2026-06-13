@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PhotoSelector.Ai.Ratings;
 using PhotoSelector.Cli;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
@@ -9,23 +10,23 @@ namespace PhotoSelector.Tests;
 public sealed class CliSmokeTests
 {
     [Fact]
-    public void Import_indexes_directory_then_catalog_commands_open_project_and_photos()
+    public void Scan_indexes_directory_then_catalog_commands_open_project_and_photos()
     {
         using var tempDirectory = new TempDirectory();
         using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
         var sourceDirectory = CreateSourceDirectory(tempDirectory.Path);
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
 
-        var importOutput = new StringWriter();
-        var importError = new StringWriter();
-        var importExitCode = CliApp.Run(["import", sourceDirectory], importOutput, importError);
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient();
+        var scanOutput = new StringWriter();
+        var scanError = new StringWriter();
+        var scanExitCode = CliApp.Run(["scan", sourceDirectory], scanOutput, scanError, TextReader.Null, secretStore, client);
 
-        Assert.Equal(0, importExitCode);
-        Assert.Equal(string.Empty, importError.ToString());
+        Assert.Equal(0, scanExitCode);
+        Assert.Equal(string.Empty, scanError.ToString());
         Assert.True(File.Exists(databasePath));
-        Assert.Contains("Imported 2 photo(s)", importOutput.ToString());
-        Assert.Contains("Project: 1", importOutput.ToString());
-        Assert.Contains(databasePath, importOutput.ToString());
+        Assert.Contains("Scanned 2 photo(s)", scanOutput.ToString());
 
         var projectsOutput = new StringWriter();
         Assert.Equal(0, CliApp.Run(["projects", "list", "--json"], projectsOutput, TextWriter.Null));
@@ -53,7 +54,7 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public void Import_creates_shared_catalog_database_with_jpg_and_raw_files()
+    public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();
         using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
@@ -64,17 +65,17 @@ public sealed class CliSmokeTests
         File.WriteAllText(jpegPath, "jpeg");
         File.WriteAllText(rawPath, "raw");
 
+        var secretStore = Login(new MemorySecretStore());
         var output = new StringWriter();
         var error = new StringWriter();
-        var exitCode = CliApp.Run(new[] { "import", sourceDirectory }, output, error);
+        var exitCode = CliApp.Run(["scan", sourceDirectory], output, error, TextReader.Null, secretStore, new RecordingRatingClient());
 
         var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
         var sidecarDatabasePath = Path.Combine(sourceDirectory, ".photo-selector", "photo-selector.db");
         Assert.Equal(0, exitCode);
         Assert.True(File.Exists(databasePath));
         Assert.False(File.Exists(sidecarDatabasePath));
-        Assert.Contains(databasePath, output.ToString());
-        Assert.Contains("Imported 1 photo(s)", output.ToString());
+        Assert.Contains("Scanned 1 photo(s)", output.ToString());
         Assert.Equal(string.Empty, error.ToString());
 
         using var database = ProjectDatabase.Open(databasePath);
@@ -87,17 +88,26 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
-    public void Process_openai_compatible_provider_succeeds_when_catalog_has_no_pending_jobs()
+    public void Removed_catalog_worker_commands_show_usage()
     {
         using var tempDirectory = new TempDirectory();
         using var configEnv = new ScopedEnvironment("PHOTO_SELECTOR_CONFIG_HOME", tempDirectory.Path);
-        var databasePath = Path.Combine(tempDirectory.Path, "photo-selector.db");
-        using (var database = ProjectDatabase.Open(databasePath))
-        {
-            database.Migrate();
-        }
 
-        var secretStore = new MemorySecretStore();
+        foreach (var command in new[] { "import", "process", "flush" })
+        {
+            var output = new StringWriter();
+            var error = new StringWriter();
+            var exitCode = CliApp.Run([command, tempDirectory.Path], output, error);
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal(string.Empty, output.ToString());
+            Assert.Contains("Usage:", error.ToString());
+            Assert.DoesNotContain($"photo-selector {command}", error.ToString());
+        }
+    }
+
+    private static MemorySecretStore Login(MemorySecretStore secretStore)
+    {
         Assert.Equal(
             0,
             CliApp.Run(
@@ -106,19 +116,33 @@ public sealed class CliSmokeTests
                 TextWriter.Null,
                 new StringReader("sk-test\n"),
                 secretStore));
+        return secretStore;
+    }
 
-        var output = new StringWriter();
-        var error = new StringWriter();
-        var exitCode = CliApp.Run(
-            new[] { "process" },
-            output,
-            error,
-            TextReader.Null,
-            secretStore);
+    private sealed class RecordingRatingClient : IPhotoRatingClient
+    {
+        public Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
+        {
+            var rating = new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate.");
+            return Task.FromResult(new AiRatingClientResult(
+                rating,
+                new AiRatingAudit(
+                    request.Prompt,
+                    """{"image_url":"[redacted-data-url]"}""",
+                    """{"photo_type":"street","score":7.1}""",
+                    """{"choices":[{"message":{"content":"{\"photo_type\":\"street\",\"score\":7.1}"}}]}""",
+                    200,
+                    null)));
+        }
 
-        Assert.Equal(0, exitCode);
-        Assert.Equal(string.Empty, error.ToString());
-        Assert.Contains("Rated 0 photo(s)", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        public void Dispose()
+        {
+        }
     }
 
     private static string CreateSourceDirectory(string rootDirectory)

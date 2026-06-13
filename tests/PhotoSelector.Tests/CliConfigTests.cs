@@ -34,7 +34,7 @@ public sealed class CliConfigTests
     }
 
     [Fact]
-    public void Auth_login_stores_secret_reference_shared_by_status_and_process()
+    public void Auth_login_stores_secret_reference_shared_by_status()
     {
         using var tempDirectory = new TempDirectory();
         var secretStore = new MemorySecretStore();
@@ -69,21 +69,11 @@ public sealed class CliConfigTests
         Assert.Contains("secret_store: memory", statusOutput.ToString());
         Assert.Equal(string.Empty, statusError.ToString());
 
-        var processOutput = new StringWriter();
-        var processError = new StringWriter();
-        var processExitCode = CliApp.Run(
-            ["process"],
-            processOutput,
-            processError,
-            TextReader.Null,
-            secretStore);
-
-        Assert.Equal(0, processExitCode);
-        Assert.Contains("Rated 0 photo(s)", processOutput.ToString());
-        Assert.Contains("openai-compatible", processOutput.ToString());
-        Assert.Contains("gpt-4.1-mini", processOutput.ToString());
-        Assert.Contains("api_key_ref", processOutput.ToString());
-        Assert.Equal(string.Empty, processError.ToString());
+        var configOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["config", "list"], configOutput, TextWriter.Null, TextReader.Null, secretStore));
+        Assert.Contains("openai-compatible", configOutput.ToString());
+        Assert.Contains("gpt-4.1-mini", configOutput.ToString());
+        Assert.Contains("api_key_ref", configOutput.ToString());
     }
 
     private sealed class ScopedEnvironment : IDisposable

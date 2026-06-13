@@ -11,13 +11,13 @@
 ## Current Commands
 
 - Config commands configure provider profiles, endpoint, model, API key references, API key environment variables, and output language.
-- `import` indexes a directory into the shared default catalog.
-- `scan <directory>` is the preferred synchronous fast path: index a directory, then rate that imported project before returning.
-- `status`, `process`, `flush`, and `reset ratings` expose queued work without exposing worker internals.
+- `pick <directory>` is the primary product command for multi-photo selection: index a directory, rate pending or failed photos with the selection prompt, then print results.
+- `scan <directory>` is the synchronous automation/debug fast path: index a directory, then rate pending or failed photos with the default rating prompt before returning.
+- `status` and `reset ratings` expose catalog state and rerating control without exposing worker-management commands.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
-- Rating work is invoked through `scan` or queued `process`, not a user-facing `rate <db>` command.
+- Rating work is invoked through `pick`, `scan`, `rate`, `coach`, or `arena`, not a user-facing `process` or `rate <db>` command.
 - Audit product commands are not wired yet; keep their remaining work in the root TODO list instead of shipping temporary database-path commands.
 
 ## Dependencies
@@ -33,6 +33,7 @@ The CLI depends on:
 
 - Keep command handlers thin: parse arguments, call shared services, format output.
 - Prefer source directories or current catalog context in user-facing commands; project IDs are acceptable for JSON/debug surfaces, and database paths should stay internal.
+- Do not reintroduce top-level `import`, `process`, `flush`, or `worker` commands. They are internal workflow concepts, not product CLI verbs.
 - Avoid provider-specific branches here when they can live in `PhotoSelector.Ai`.
 - Avoid platform-specific secret code here; use `PhotoSelector.Config`.
 - If `Program.cs` keeps growing, split command handlers or application services rather than adding more deep logic to one file.

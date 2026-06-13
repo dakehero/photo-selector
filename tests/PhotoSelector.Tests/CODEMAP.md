@@ -10,8 +10,8 @@
 - Config persistence, credential provider selection, and API key resolution behavior.
 - AI rating parsing, prompt/request payloads, provider factory behavior, and compatible-provider HTTP behavior.
 - CLI smoke tests and rating command orchestration.
-- Catalog-first CLI import/open/list behavior.
-- Queued import/status/process/flush/reset CLI behavior.
+- Catalog-first CLI scan/open/list behavior.
+- Product CLI rating, status, reset, and removed-command behavior.
 - Avalonia view-model behavior that can be tested without launching the full UI.
 
 ## Important Files

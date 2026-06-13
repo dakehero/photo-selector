@@ -52,12 +52,9 @@ public static partial class CliApp
                 "pick" => RunPick(args, output, error, secretStore, ratingClient),
                 "rate" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate),
                 "coach" => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach),
-                "import" => RunImport(args, output, error),
                 "arena" => RunArena(args, output, error, secretStore, ratingClient),
                 "scan" => RunScan(args, output, error, secretStore, ratingClient),
                 "status" => RunStatus(args, output, error),
-                "process" => RunProcess(args, output, error, secretStore, ratingClient),
-                "flush" => RunFlush(args, output, error, secretStore, ratingClient),
                 "reset" => RunReset(args, output, error),
                 "results" => RunResults(args, output, error),
                 "export" => RunExport(args, output, error),
@@ -155,24 +152,6 @@ public static partial class CliApp
         output.WriteLine($"prompt: {(string.IsNullOrWhiteSpace(profile.Prompt) ? "(default)" : profile.Prompt)}");
         output.WriteLine($"output_language: {profile.OutputLanguage}");
         output.WriteLine($"concurrency: {profile.Concurrency}");
-        return 0;
-    }
-
-    private static int RunImport(string[] args, TextWriter output, TextWriter error)
-    {
-        if (args.Length != 2)
-        {
-            return WriteUsage(error);
-        }
-
-        var result = ImportDirectory(args[1], error);
-        if (result is null)
-        {
-            return 1;
-        }
-
-        output.WriteLine(
-            $"Imported {result.PhotoCount} photo(s). Project: {result.ProjectId}. Catalog: {result.DatabasePath}; pending: {result.PendingRatingJobs}");
         return 0;
     }
 
@@ -393,13 +372,13 @@ public static partial class CliApp
         return processing.Failed == 0 ? 0 : 1;
     }
 
-    private static ImportResult? ImportDirectory(string directory, TextWriter error, bool forceJobs = false)
+    private static ImportResult? ImportDirectory(string directory, TextWriter error)
     {
         var databasePath = ConfigPaths.GetDatabasePath();
         using var database = OpenCatalogDatabase();
         try
         {
-            var result = new ImportWorkflow().ImportDirectory(database, directory, forceJobs);
+            var result = new ImportWorkflow().ImportDirectory(database, directory);
             return new ImportResult(databasePath, result.ProjectId, result.PhotoCount, result.PendingRatingJobs);
         }
         catch (DirectoryNotFoundException ex)
@@ -647,135 +626,6 @@ public static partial class CliApp
         output.WriteLine($"rated: {rated}");
         output.WriteLine($"failed: {summary.Failed}");
         return 0;
-    }
-
-    private static int RunProcess(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        ISecretStore secretStore,
-        IPhotoRatingClient? ratingClient)
-    {
-        if (args.Length > 4)
-        {
-            return WriteUsage(error);
-        }
-
-        string? projectSelector = null;
-        string? modelOverride = null;
-        if (args.Length >= 2)
-        {
-            if (args[1] == "--model")
-            {
-                if (args.Length != 3 || string.IsNullOrWhiteSpace(args[2]))
-                {
-                    return WriteUsage(error);
-                }
-
-                modelOverride = args[2];
-            }
-            else
-            {
-                projectSelector = args[1];
-                if (args.Length == 4)
-                {
-                    if (args[2] != "--model" || string.IsNullOrWhiteSpace(args[3]))
-                    {
-                        return WriteUsage(error);
-                    }
-
-                    modelOverride = args[3];
-                }
-                else if (args.Length != 2)
-                {
-                    return WriteUsage(error);
-                }
-            }
-        }
-
-        using var database = OpenCatalogDatabase();
-        PhotoProject? project = null;
-        if (projectSelector is not null)
-        {
-            project = FindProject(database, projectSelector);
-            if (project is null)
-            {
-                error.WriteLine($"Project not found: {projectSelector}");
-                return 1;
-            }
-        }
-
-        return ProcessPendingJobs(
-            database,
-            project?.Id,
-            force: false,
-            retryFailed: false,
-            modelOverride,
-            output,
-            error,
-            secretStore,
-            ratingClient);
-    }
-
-    private static int RunFlush(
-        string[] args,
-        TextWriter output,
-        TextWriter error,
-        ISecretStore secretStore,
-        IPhotoRatingClient? ratingClient)
-    {
-        if (args.Length is not (2 or 3 or 5))
-        {
-            return WriteUsage(error);
-        }
-
-        var runNow = false;
-        string? modelOverride = null;
-        if (args.Length == 3)
-        {
-            if (args[2] != "--now")
-            {
-                return WriteUsage(error);
-            }
-
-            runNow = true;
-        }
-        else if (args.Length == 5)
-        {
-            if (args[2] != "--now" || args[3] != "--model" || string.IsNullOrWhiteSpace(args[4]))
-            {
-                return WriteUsage(error);
-            }
-
-            runNow = true;
-            modelOverride = args[4];
-        }
-
-        var result = ImportDirectory(args[1], error, forceJobs: true);
-        if (result is null)
-        {
-            return 1;
-        }
-
-        output.WriteLine(
-            $"Flushed {result.PhotoCount} photo(s). Project: {result.ProjectId}. Catalog: {result.DatabasePath}; pending: {result.PendingRatingJobs}");
-
-        if (!runNow)
-        {
-            return 0;
-        }
-
-        using var database = OpenCatalogDatabase();
-        return ProcessPendingJobs(
-            database,
-            result.ProjectId,
-            force: true,
-            retryFailed: false,
-            modelOverride,
-            output,
-            error,
-            secretStore,
-            ratingClient);
     }
 
     private static int RunReset(string[] args, TextWriter output, TextWriter error)
@@ -1266,36 +1116,6 @@ public static partial class CliApp
         return preview is not null;
     }
 
-    private static int ProcessPendingJobs(
-        ProjectDatabase database,
-        long? projectId,
-        bool force,
-        bool retryFailed,
-        string? modelOverride,
-        TextWriter output,
-        TextWriter error,
-        ISecretStore secretStore,
-        IPhotoRatingClient? ratingClient)
-    {
-        var result = ProcessPendingJobsCore(
-            database,
-            projectId,
-            force,
-            retryFailed,
-            modelOverride,
-            error,
-            secretStore,
-            ratingClient,
-            output);
-        if (result is null)
-        {
-            return 1;
-        }
-
-        WriteProcessingSummary(result, output);
-        return result.Failed == 0 ? 0 : 1;
-    }
-
     private static void WriteProcessingSummary(ProcessingJson result, TextWriter output)
     {
         foreach (var message in result.Messages)
@@ -1714,14 +1534,11 @@ public static partial class CliApp
         error.WriteLine("  photo-selector auth logout --profile default");
         error.WriteLine("  photo-selector config set <provider|base_url|model|api_key_env|prompt|output_language|concurrency> <value>");
         error.WriteLine("  photo-selector config list");
-        error.WriteLine("  photo-selector import <directory>");
         error.WriteLine("  photo-selector arena <directory> --models <model1,model2> [--limit <n>]");
         error.WriteLine("  photo-selector arena list [directory] [--json]");
         error.WriteLine("  photo-selector arena show <run-id> [--json]");
         error.WriteLine("  photo-selector scan <directory> [--model <model>] [--json]");
         error.WriteLine("  photo-selector status [directory] [--json]");
-        error.WriteLine("  photo-selector process [directory] [--model <model>]");
-        error.WriteLine("  photo-selector flush <directory> [--now [--model <model>]]");
         error.WriteLine("  photo-selector reset ratings <directory> [--with-audit]");
         error.WriteLine("  photo-selector results [directory] [--json]");
         error.WriteLine("  photo-selector export <keep|maybe|reject> <directory> <target>");
