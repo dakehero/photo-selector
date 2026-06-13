@@ -957,14 +957,15 @@ public static partial class CliApp
         TextWriter output,
         TextWriter error)
     {
-        var match = FindPhoto(database, project, photoSelector);
-        if (match is null)
+        if (!TryFindPhoto(database, project, photoSelector, out var match, out var ambiguous))
         {
-            error.WriteLine($"Photo not found: {photoSelector}");
+            error.WriteLine(ambiguous
+                ? $"Photo selector is ambiguous: {photoSelector}. Add a directory filter or use the photo id."
+                : $"Photo not found: {photoSelector}");
             return 1;
         }
 
-        var (matchedProject, photo) = match.Value;
+        var (matchedProject, photo) = match;
         var result = ToPhotoResultJson(new PhotoResult(
             photo,
             database.ListRatings(photo.Id).FirstOrDefault(),
@@ -991,29 +992,41 @@ public static partial class CliApp
         return 0;
     }
 
-    private static (PhotoProject Project, PhotoItem Photo)? FindPhoto(
+    private static bool TryFindPhoto(
         ProjectDatabase database,
         PhotoProject? project,
-        string photoSelector)
+        string photoSelector,
+        out (PhotoProject Project, PhotoItem Photo) match,
+        out bool ambiguous)
     {
+        match = default;
+        ambiguous = false;
         var projects = project is null ? database.ListProjects() : [project];
         if (long.TryParse(photoSelector, out var photoId))
         {
             var photo = database.GetPhoto(photoId);
             if (photo is null || projects.All(item => item.Id != photo.ProjectId))
             {
-                return null;
+                return false;
             }
 
             var photoProject = projects.First(item => item.Id == photo.ProjectId);
-            return (photoProject, photo);
+            match = (photoProject, photo);
+            return true;
         }
 
         var matches = projects
             .SelectMany(item => database.ListPhotos(item.Id).Select(photo => (Project: item, Photo: photo)))
             .Where(item => string.Equals(item.Photo.BaseName, photoSelector, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        return matches.Length == 1 ? matches[0] : null;
+        if (matches.Length == 1)
+        {
+            match = matches[0];
+            return true;
+        }
+
+        ambiguous = matches.Length > 1;
+        return false;
     }
 
     private static void WritePhotoResult(ResultsPhotoJson result, TextWriter output)

@@ -253,6 +253,53 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Results_audit_requires_photo_selector()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["results", "--audit"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Contains("--audit requires --photo.", error.ToString());
+    }
+
+    [Fact]
+    public void Results_photo_base_name_reports_ambiguous_matches_across_projects()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var firstDirectory = Path.Combine(tempDirectory.Path, "shoot-a");
+        var secondDirectory = Path.Combine(tempDirectory.Path, "shoot-b");
+        Directory.CreateDirectory(firstDirectory);
+        Directory.CreateDirectory(secondDirectory);
+        var firstJpeg = Path.Combine(firstDirectory, "IMG_0001.JPG");
+        var secondJpeg = Path.Combine(secondDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(firstJpeg, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+        File.WriteAllBytes(secondJpeg, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var firstProjectId = database.CreateProject(firstDirectory);
+            database.ReplacePhotos(firstProjectId, [new PhotoPair("IMG_0001", firstJpeg, null)]);
+            var secondProjectId = database.CreateProject(secondDirectory);
+            database.ReplacePhotos(secondProjectId, [new PhotoPair("IMG_0001", secondJpeg, null)]);
+        }
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["results", "--photo", "IMG_0001", "--json"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(string.Empty, output.ToString());
+        Assert.Contains("Photo selector is ambiguous: IMG_0001", error.ToString());
+    }
+
+    [Fact]
     public void Export_keep_copies_latest_keep_rated_jpeg_and_raw_pairs_from_catalog()
     {
         using var tempDirectory = new TempDirectory();
