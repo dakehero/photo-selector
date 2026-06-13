@@ -138,30 +138,36 @@ The CLI exists for batch use and for AI agents to call. It must not expose SQLit
 Commands:
 
 ```bash
-photo-selector import <directory>
+photo-selector pick <directory>
+photo-selector rate <image>
+photo-selector coach <image>
+photo-selector arena <directory> --models <model-a,model-b> [--limit <count>]
+photo-selector arena list [directory] [--json]
+photo-selector arena show <run-id> [--json]
 photo-selector scan <directory>
 photo-selector status [directory]
-photo-selector process [directory]
-photo-selector flush <directory> [--now]
 photo-selector reset ratings <directory> [--with-audit]
 photo-selector results [directory]
+photo-selector results [directory] --photo <photo-id|base-name> [--audit] [--json]
 photo-selector export <keep|maybe|reject> <directory> <target>
 photo-selector projects list --json
 photo-selector open <project-id|directory> --json
 photo-selector photos list --project <project-id> --json
 ```
 
-`import` is the indexing/background-friendly entry point. It creates or updates a project, indexes JPG+RAW pairs, and enqueues pending rating jobs without requiring AI results before returning.
+`pick` is the product-facing multi-photo culling command. It imports or updates a directory, rates pending or failed photos with the selection prompt, supports configurable preview quality and concurrency, and returns ranked results before exiting.
+
+`rate` scores one image with the rating prompt. `coach` critiques one image with the coaching prompt. Both are useful for testing prompts and for future agent loops.
+
+`arena` compares multiple models against the same imported photo set and records model-by-model results for later inspection.
 
 `scan` is the synchronous fast path. It imports or updates the directory, processes pending rating jobs for that directory, and returns a result summary before exiting.
-
-`process` handles existing pending jobs without rescanning files.
-
-`flush` refreshes file input by rescanning a directory, updating the index, and requeueing work. `flush --now` then processes the directory immediately.
 
 `reset ratings` removes AI rating outputs for a directory and requeues work. It preserves audit logs by default; `--with-audit` deletes audit logs too.
 
 `results` summarizes rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
+
+`results --photo <photo-id|base-name> --audit` shows a single photo's result and redacted AI audit trail without exposing SQLite paths.
 
 `export` copies JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
@@ -188,7 +194,7 @@ Scanning:
 AI scoring:
 
 - A failed request marks only that rating job as failed.
-- Failed jobs can be retried by future retry/process commands.
+- Failed jobs can be retried by product commands that revisit pending or failed work, such as `pick` and `scan`.
 - Raw response or error details are stored in audit logs with secrets and image data redacted.
 
 Export:
@@ -210,10 +216,13 @@ Core tests:
 
 CLI tests:
 
-- `import` creates or updates a shared catalog project and enqueues rating jobs.
 - `scan` imports and synchronously processes rating jobs.
-- `status`, `process`, `flush`, and `reset ratings` follow the catalog-first semantics.
+- `pick` imports a directory, applies the selection prompt, and returns ranked results.
+- `rate` and `coach` process a single image with separate prompt contracts.
+- `arena` records multi-model comparisons for the same photo set.
+- `status` and `reset ratings` follow the catalog-first semantics.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
+- `results --photo <photo-id|base-name> --audit --json` emits a parseable decision trace.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs without requiring SQLite paths.
 - `projects/open/photos --json` emit parseable JSON without requiring SQLite paths.
 

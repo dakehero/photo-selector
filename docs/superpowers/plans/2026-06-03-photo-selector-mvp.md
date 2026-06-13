@@ -6,7 +6,7 @@
 
 **Architecture:** Use a .NET solution with focused projects: core storage/domain logic, AI integration, shared agent/workflow orchestration, CLI, Avalonia UI, shared config/credentials, and tests. Core behavior is implemented test-first and reused by CLI and GUI.
 
-**Tech Stack:** .NET 10 currently, Avalonia, Microsoft.Data.Sqlite, xUnit, OpenAI .NET SDK for OpenAI where practical, and simple hand-rolled CLI parsing until a command framework is clearly worth adding.
+**Tech Stack:** .NET 10 currently, Avalonia, Microsoft.Data.Sqlite, xUnit, OpenAI .NET SDK for OpenAI where practical, and System.CommandLine for the NativeAOT-friendly CLI surface.
 
 **2026-06-09 revision:** This plan has been corrected to match the current product design. Do not implement old database-path CLI commands. User-facing CLI commands must be catalog-first and should not expose SQLite paths.
 
@@ -19,7 +19,7 @@
 - `src/PhotoSelector.Ai/`: provider clients, scoring models, prompt contract, parser, and audit payload helpers.
 - `src/PhotoSelector.Config/`: shared config paths, provider profiles, and credential resolution.
 - `src/PhotoSelector.Agent/`: import workflow, queued rating jobs, and worker orchestration shared by CLI/GUI/future agents.
-- `src/PhotoSelector.Cli/`: catalog-first commands: `import`, `scan`, `status`, `process`, `flush`, `reset ratings`, `results`, `export`, `projects`, `open`, and `photos`.
+- `src/PhotoSelector.Cli/`: catalog-first commands: `pick`, `rate`, `coach`, `arena`, `scan`, `status`, `reset ratings`, `results`, `export`, `projects`, `open`, and `photos`.
 - `src/PhotoSelector.App/`: Avalonia app matching the approved workbench prototype.
 - `tests/PhotoSelector.Tests/`: xUnit tests for core and CLI-critical behavior.
 - `prototypes/photo-selector-workbench.html`: already created visual reference for the desktop workbench.
@@ -461,14 +461,15 @@ git commit -m "feat: parse ai rating results"
 
 Test the CLI can:
 
-- `import <directory>` into the shared catalog and enqueue pending rating jobs.
+- `pick <directory>` import/update a directory, rate pending or failed photos with the selection prompt, and output ranked results.
+- `rate <image>` rate one image with the rating prompt.
+- `coach <image>` critique one image with the coaching prompt.
+- `arena <directory> --models <model-a,model-b>` compare models and save arena runs.
 - `scan <directory>` synchronously import and rate pending jobs.
 - `status [directory]` report pending/rated/failed counts.
-- `process [directory]` process existing pending jobs without rescanning files.
-- `flush <directory>` rescan and requeue without deleting ratings.
-- `flush <directory> --now` rescan, requeue, and process immediately.
 - `reset ratings <directory>` delete ratings, preserve audit logs, and requeue work.
 - `results [directory]` summarize rating coverage, keep/maybe/reject counts, and top candidates.
+- `results [directory] --photo <photo-id|base-name> --audit --json` emit a parseable decision trace.
 - `export <keep|maybe|reject> <directory> <target>` copy matching JPG+RAW pairs without requiring SQLite paths.
 - `projects list --json`, `open <project-id|directory> --json`, and `photos list --project <id> --json` emit parseable JSON.
 
@@ -487,13 +488,17 @@ Expected: FAIL because CLI commands are not implemented.
 Implement commands:
 
 ```powershell
-photo-selector import <directory>
+photo-selector pick <directory>
+photo-selector rate <image>
+photo-selector coach <image>
+photo-selector arena <directory> --models <model-a,model-b> [--limit <count>]
+photo-selector arena list [directory] [--json]
+photo-selector arena show <run-id> [--json]
 photo-selector scan <directory>
 photo-selector status [directory]
-photo-selector process [directory]
-photo-selector flush <directory> [--now]
 photo-selector reset ratings <directory> [--with-audit]
 photo-selector results [directory]
+photo-selector results [directory] --photo <photo-id|base-name> [--audit] [--json]
 photo-selector export <keep|maybe|reject> <directory> <target>
 photo-selector projects list --json
 photo-selector open <project-id|directory> --json
@@ -502,17 +507,21 @@ photo-selector photos list --project <project-id> --json
 
 Do not implement `rate <project-db>`, `list <project-db>`, `export <project-db>`, `audit <project-db>`, or `quick-select`. The product has not shipped; there is no compatibility requirement.
 
-`import` should create/update the shared catalog and enqueue rating jobs without waiting for AI.
+Do not reintroduce user-facing `import`, `process`, `flush`, or `worker` commands. Product commands should express the user's intent directly.
+
+`pick` should create/update the shared catalog, process pending or failed jobs with the selection prompt, and return ranked results.
+
+`rate` and `coach` should process one image with separate prompt contracts.
+
+`arena` should compare multiple models on the same photo set and persist the comparison for `arena list` and `arena show`.
 
 `scan` should create/update the shared catalog and synchronously process rating jobs for that directory before returning.
-
-`process` should process existing pending jobs and must not rescan files.
-
-`flush` should rescan files and requeue jobs without deleting ratings by default.
 
 `reset ratings` should delete rating outputs and preserve audit logs unless `--with-audit` is supplied.
 
 `results` should summarize rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
+
+`results --photo <photo-id|base-name> --audit` should expose one photo's redacted request, raw model message, raw provider response, status, and parse error when present.
 
 `export` should copy JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
