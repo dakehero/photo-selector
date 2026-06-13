@@ -147,6 +147,16 @@ public sealed class ProjectDatabase : IDisposable
                 FOREIGN KEY (arena_run_id) REFERENCES arena_runs (id) ON DELETE CASCADE,
                 FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS user_marks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL UNIQUE,
+                decision TEXT NOT NULL,
+                stars INTEGER NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
+            );
             """;
         command.ExecuteNonQuery();
         AddColumnIfMissing("ratings", "photo_type", "TEXT NOT NULL DEFAULT 'unknown'");
@@ -700,6 +710,60 @@ public sealed class ProjectDatabase : IDisposable
         return (long)command.ExecuteScalar()!;
     }
 
+    public void SaveUserMark(long photoId, string decision, int stars, string? note)
+    {
+        if (!IsUserDecision(decision))
+        {
+            throw new ArgumentOutOfRangeException(nameof(decision), "Decision must be unreviewed, keep, maybe, or reject.");
+        }
+
+        if (stars is < 0 or > 5)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stars), "Stars must be between 0 and 5.");
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO user_marks (photo_id, decision, stars, note, updated_at)
+            VALUES ($photo_id, $decision, $stars, $note, $updated_at)
+            ON CONFLICT(photo_id) DO UPDATE SET
+                decision = excluded.decision,
+                stars = excluded.stars,
+                note = excluded.note,
+                updated_at = excluded.updated_at;
+            """;
+        command.Parameters.AddWithValue("$photo_id", photoId);
+        command.Parameters.AddWithValue("$decision", decision);
+        command.Parameters.AddWithValue("$stars", stars);
+        command.Parameters.AddWithValue("$note", note ?? string.Empty);
+        command.Parameters.AddWithValue("$updated_at", FormatTimestamp(DateTimeOffset.UtcNow));
+        command.ExecuteNonQuery();
+    }
+
+    public PhotoUserMark? GetUserMark(long photoId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, photo_id, decision, stars, note, updated_at
+            FROM user_marks
+            WHERE photo_id = $photo_id;
+            """;
+        command.Parameters.AddWithValue("$photo_id", photoId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new PhotoUserMark(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetString(2),
+            reader.GetInt32(3),
+            reader.GetString(4),
+            ParseTimestamp(reader.GetString(5)));
+    }
+
     public long SaveRatingAuditLog(
         long photoId,
         long? ratingId,
@@ -1105,6 +1169,11 @@ public sealed class ProjectDatabase : IDisposable
     private static string FormatTimestamp(DateTimeOffset value)
     {
         return value.ToUniversalTime().ToString("O");
+    }
+
+    private static bool IsUserDecision(string decision)
+    {
+        return decision is "unreviewed" or "keep" or "maybe" or "reject";
     }
 
     private static DateTimeOffset ParseTimestamp(string value)

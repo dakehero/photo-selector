@@ -64,6 +64,39 @@ public sealed class ProjectDatabaseTests
     }
 
     [Fact]
+    public void User_mark_is_saved_and_updated_per_photo()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", Path.Combine(sourceDirectory, "IMG_0001.JPG"), null)]);
+        var photo = Assert.Single(database.ListPhotos(projectId));
+
+        database.SaveUserMark(photo.Id, "keep", 5, "portfolio candidate");
+        var first = database.GetUserMark(photo.Id);
+
+        Assert.NotNull(first);
+        Assert.Equal(photo.Id, first.PhotoId);
+        Assert.Equal("keep", first.Decision);
+        Assert.Equal(5, first.Stars);
+        Assert.Equal("portfolio candidate", first.Note);
+
+        database.SaveUserMark(photo.Id, "maybe", 3, "compare with next frame");
+        var updated = database.GetUserMark(photo.Id);
+
+        Assert.NotNull(updated);
+        Assert.Equal(first.Id, updated.Id);
+        Assert.Equal("maybe", updated.Decision);
+        Assert.Equal(3, updated.Stars);
+        Assert.Equal("compare with next frame", updated.Note);
+        Assert.True(updated.UpdatedAt >= first.UpdatedAt);
+    }
+
+    [Fact]
     public void Migrate_keeps_one_schema_version_row()
     {
         using var tempDirectory = new TempDirectory();

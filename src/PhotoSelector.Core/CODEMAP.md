@@ -9,7 +9,7 @@
 - `Files`: classifies supported photo file extensions.
 - `Scanning`: scans files or directories and groups JPG+RAW pairs by base name.
 - `Projects`: immutable records used by storage, CLI, GUI, and agent-facing workflows.
-- `Storage`: SQLite project, photo, rating, audit, and rating-job persistence. The default database path is selected by `PhotoSelector.Config`.
+- `Storage`: SQLite project, photo, rating, audit, rating-job, and user-mark persistence. The default database path is selected by `PhotoSelector.Config`.
 - `Exporting`: copies selected photo files into timestamped export folders.
 
 ## Important Files
@@ -21,6 +21,7 @@
 - `Projects/PhotoItem.cs`: persisted photo row shape used by consumers.
 - `Projects/PhotoRating.cs`: parsed rating result attached to a photo.
 - `Projects/PhotoRatingAuditLog.cs`: raw and redacted AI decision trace.
+- `Projects/PhotoUserMark.cs`: manual decision, star rating, and note attached to one photo.
 - `Projects/RatingJob.cs`: durable queued rating work item.
 - `Projects/RatingJobSummary.cs`: pending/completed/failed job counts.
 - `Exporting/ExportService.cs`: export/copy behavior.
