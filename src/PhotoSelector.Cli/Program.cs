@@ -79,7 +79,7 @@ public static partial class CliApp
         root.Action = new RelayAction(_ => WriteUsage(error));
         root.Subcommands.Add(CreateRelayCommand("help", _ => RunHelp(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("auth", _ => RunAuth(args, output, error, input, secretStore), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("config", _ => RunConfig(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(BuildConfigCommand(output, error));
         root.Subcommands.Add(CreateRelayCommand("pick", _ => RunPick(args, output, error, secretStore, ratingClient), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("rate", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("coach", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach), allowUnmatched: true));
@@ -185,54 +185,59 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunConfig(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildConfigCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length < 2)
-        {
-            return WriteUsage(error);
-        }
+        var command = new Command("config", "Manage shared CLI and app configuration.");
+        command.Action = new RelayAction(_ => WriteUsage(error));
 
-        return args[1] switch
-        {
-            "set" => RunConfigSet(args, output, error),
-            "list" => RunConfigList(args, output),
-            _ => WriteUsage(error),
-        };
+        var set = new Command("set", "Set a shared configuration value.");
+        var keyArgument = new Argument<string>("key");
+        var valueArgument = new Argument<string>("value");
+        set.Arguments.Add(keyArgument);
+        set.Arguments.Add(valueArgument);
+        set.SetAction(parseResult =>
+            RunConfigSet(
+                parseResult.GetRequiredValue(keyArgument),
+                parseResult.GetRequiredValue(valueArgument),
+                output,
+                error));
+        command.Subcommands.Add(set);
+
+        var list = new Command("list", "Print the active shared configuration.");
+        list.SetAction(_ => RunConfigList(output));
+        command.Subcommands.Add(list);
+
+        return command;
     }
 
-    private static int RunConfigSet(string[] args, TextWriter output, TextWriter error)
+    private static int RunConfigSet(string key, string value, TextWriter output, TextWriter error)
     {
-        if (args.Length != 4)
-        {
-            return WriteUsage(error);
-        }
-
         var store = new ConfigStore();
         var config = store.Load();
         var profile = config.GetOrCreateProfile(config.ActiveProfile);
 
-        switch (args[2])
+        switch (key)
         {
             case "provider":
-                profile.Provider = args[3];
+                profile.Provider = value;
                 break;
             case "base_url":
-                profile.BaseUrl = args[3];
+                profile.BaseUrl = value;
                 break;
             case "model":
-                profile.Model = args[3];
+                profile.Model = value;
                 break;
             case "api_key_env":
-                profile.ApiKeyEnv = args[3];
+                profile.ApiKeyEnv = value;
                 break;
             case "prompt":
-                profile.Prompt = args[3];
+                profile.Prompt = value;
                 break;
             case "output_language":
-                profile.OutputLanguage = args[3];
+                profile.OutputLanguage = value;
                 break;
             case "concurrency":
-                if (!int.TryParse(args[3], out var concurrency) || concurrency < 1)
+                if (!int.TryParse(value, out var concurrency) || concurrency < 1)
                 {
                     error.WriteLine("concurrency must be a positive integer.");
                     return 1;
@@ -241,16 +246,16 @@ public static partial class CliApp
                 profile.Concurrency = concurrency;
                 break;
             default:
-                error.WriteLine($"Unknown config key: {args[2]}");
+                error.WriteLine($"Unknown config key: {key}");
                 return 1;
         }
 
         store.Save(config);
-        output.WriteLine($"Updated {args[2]} for profile '{config.ActiveProfile}'. Config: {store.ConfigPath}");
+        output.WriteLine($"Updated {key} for profile '{config.ActiveProfile}'. Config: {store.ConfigPath}");
         return 0;
     }
 
-    private static int RunConfigList(string[] args, TextWriter output)
+    private static int RunConfigList(TextWriter output)
     {
         var store = new ConfigStore();
         var config = store.Load();
