@@ -300,6 +300,49 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Mark_saves_manual_decision_for_photo()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+        }
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(
+            ["mark", sourceDirectory, "IMG_0001", "--decision", "keep", "--stars", "5", "--note", "portfolio candidate", "--json"],
+            output,
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal("IMG_0001", json.RootElement.GetProperty("photo").GetProperty("baseName").GetString());
+        Assert.Equal("keep", json.RootElement.GetProperty("mark").GetProperty("decision").GetString());
+        Assert.Equal(5, json.RootElement.GetProperty("mark").GetProperty("stars").GetInt32());
+        Assert.Equal("portfolio candidate", json.RootElement.GetProperty("mark").GetProperty("note").GetString());
+
+        using var reopened = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        reopened.Migrate();
+        var project = Assert.Single(reopened.ListProjects());
+        var photo = Assert.Single(reopened.ListPhotos(project.Id));
+        var mark = reopened.GetUserMark(photo.Id);
+        Assert.NotNull(mark);
+        Assert.Equal("keep", mark.Decision);
+        Assert.Equal(5, mark.Stars);
+        Assert.Equal("portfolio candidate", mark.Note);
+    }
+
+    [Fact]
     public void Export_keep_copies_latest_keep_rated_jpeg_and_raw_pairs_from_catalog()
     {
         using var tempDirectory = new TempDirectory();

@@ -149,6 +149,7 @@ photo-selector status [directory]
 photo-selector reset ratings <directory> [--with-audit]
 photo-selector results [directory]
 photo-selector results [directory] --photo <photo-id|base-name> [--audit] [--json]
+photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]
 photo-selector export <keep|maybe|reject> <directory> <target>
 photo-selector projects list --json
 photo-selector open <project-id|directory> --json
@@ -168,6 +169,8 @@ photo-selector photos list --project <project-id> --json
 `results` summarizes rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
 
 `results --photo <photo-id|base-name> --audit` shows a single photo's result and redacted AI audit trail without exposing SQLite paths.
+
+`mark` saves the user's manual decision, star rating, and optional note for one photo. It must not overwrite AI ratings; manual marks are stored separately so AI output and human review remain distinguishable.
 
 `export` copies JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
@@ -223,6 +226,7 @@ CLI tests:
 - `status` and `reset ratings` follow the catalog-first semantics.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
 - `results --photo <photo-id|base-name> --audit --json` emits a parseable decision trace.
+- `mark <directory> <photo-id|base-name>` persists manual review decisions separately from AI ratings.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs without requiring SQLite paths.
 - `projects/open/photos --json` emit parseable JSON without requiring SQLite paths.
 

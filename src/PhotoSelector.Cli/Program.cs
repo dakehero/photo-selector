@@ -92,6 +92,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildStatusCommand(output, error));
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(BuildResultsCommand(output, error));
+        root.Subcommands.Add(BuildMarkCommand(output, error));
         root.Subcommands.Add(BuildExportCommand(output, error));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
         root.Subcommands.Add(BuildOpenCommand(output, error));
@@ -1055,6 +1056,100 @@ public static partial class CliApp
         }
     }
 
+    private static Command BuildMarkCommand(TextWriter output, TextWriter error)
+    {
+        var command = new Command("mark", "Save a manual decision for one photo.");
+        var directoryArgument = new Argument<string>("directory");
+        var photoArgument = new Argument<string>("photo");
+        var decisionOption = new Option<string>("--decision")
+        {
+            Required = true,
+        };
+        var starsOption = new Option<int?>("--stars");
+        var noteOption = new Option<string?>("--note");
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(directoryArgument);
+        command.Arguments.Add(photoArgument);
+        command.Options.Add(decisionOption);
+        command.Options.Add(starsOption);
+        command.Options.Add(noteOption);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunMark(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetRequiredValue(photoArgument),
+                parseResult.GetRequiredValue(decisionOption),
+                parseResult.GetValue(starsOption),
+                parseResult.GetValue(noteOption),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
+
+    private static int RunMark(
+        string projectSelector,
+        string photoSelector,
+        string decision,
+        int? stars,
+        string? note,
+        bool json,
+        TextWriter output,
+        TextWriter error)
+    {
+        if (!IsUserDecision(decision))
+        {
+            error.WriteLine("decision must be unreviewed, keep, maybe, or reject.");
+            return 1;
+        }
+
+        if (stars is < 0 or > 5)
+        {
+            error.WriteLine("stars must be between 0 and 5.");
+            return 1;
+        }
+
+        var normalizedDecision = decision.ToLowerInvariant();
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, projectSelector);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {projectSelector}");
+            return 1;
+        }
+
+        if (!TryFindPhoto(database, project, photoSelector, out var match, out var ambiguous))
+        {
+            error.WriteLine(ambiguous
+                ? $"Photo selector is ambiguous: {photoSelector}. Use the photo id."
+                : $"Photo not found: {photoSelector}");
+            return 1;
+        }
+
+        var (matchedProject, photo) = match;
+        database.SaveUserMark(photo.Id, normalizedDecision, stars ?? 0, note);
+        var mark = database.GetUserMark(photo.Id)!;
+        var payload = new MarkJson(
+            ToProjectScopeJson(matchedProject)!,
+            ToPhotoResultJson(new PhotoResult(
+                photo,
+                database.ListRatings(photo.Id).FirstOrDefault(),
+                database.ListRatingJobs(photo.ProjectId)
+                    .Where(job => job.PhotoId == photo.Id)
+                    .OrderByDescending(job => job.UpdatedAt)
+                    .FirstOrDefault())),
+            ToUserMarkJson(mark));
+
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(payload, CliJsonContext.Default.MarkJson));
+            return 0;
+        }
+
+        output.WriteLine($"Marked {payload.Photo.BaseName}: {mark.Decision}, stars: {mark.Stars}, note: {mark.Note}");
+        return 0;
+    }
+
     private static ResultsJson BuildResultsJson(ProjectDatabase database, PhotoProject? project)
     {
         var projects = project is null ? database.ListProjects() : [project];
@@ -1350,6 +1445,17 @@ public static partial class CliApp
             audit.CreatedAt);
     }
 
+    private static UserMarkJson ToUserMarkJson(PhotoUserMark mark)
+    {
+        return new UserMarkJson(
+            mark.Id,
+            mark.PhotoId,
+            mark.Decision,
+            mark.Stars,
+            mark.Note,
+            mark.UpdatedAt);
+    }
+
     private static Command BuildExportCommand(TextWriter output, TextWriter error)
     {
         var command = new Command("export", "Copy rated JPEG and RAW pairs to an export directory.");
@@ -1402,6 +1508,14 @@ public static partial class CliApp
     private static bool IsRatingCategory(string value)
     {
         return string.Equals(value, "keep", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "maybe", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "reject", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUserDecision(string value)
+    {
+        return string.Equals(value, "unreviewed", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "keep", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "maybe", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "reject", StringComparison.OrdinalIgnoreCase);
     }
@@ -2087,6 +2201,22 @@ public static partial class CliApp
             new HelpOutputJson(true, true, "Rating results summary or one photo audit trace."),
             ["photo-selector results \"C:\\Photos\\Shoot\" --json", "photo-selector results \"C:\\Photos\\Shoot\" --photo DSC_0001 --audit --json"]),
         new(
+            "mark",
+            "photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]",
+            "Save a manual decision, star rating, and note for one catalog photo.",
+            [
+                new HelpArgumentJson("directory", true, "path", "directory", "Project directory."),
+                new HelpArgumentJson("photo-id|base-name", true, "string", "selector", "Photo id or base name."),
+            ],
+            [
+                new HelpOptionJson("--decision", "string", true, ["unreviewed", "keep", "maybe", "reject"], "Manual decision to save."),
+                new HelpOptionJson("--stars", "integer", false, ["0", "1", "2", "3", "4", "5"], "Manual star rating."),
+                new HelpOptionJson("--note", "string", false, [], "Manual note."),
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Manual mark summary."),
+            ["photo-selector mark \"C:\\Photos\\Shoot\" DSC_0001 --decision keep --stars 5 --json"]),
+        new(
             "export",
             "photo-selector export <keep|maybe|reject> <directory> <target>",
             "Copy selected JPEG and RAW pairs into a timestamped export directory.",
@@ -2242,6 +2372,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(ScanJson))]
     [JsonSerializable(typeof(ResultsJson))]
     [JsonSerializable(typeof(ResultsPhotoJson))]
+    [JsonSerializable(typeof(MarkJson))]
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
     [JsonSerializable(typeof(ArenaShowJson))]
@@ -2322,6 +2453,11 @@ public static partial class CliApp
         ProjectScopeJson Project,
         PhotoRatingResultJson Photo,
         PhotoRatingAuditJson[] Audit);
+
+    private sealed record MarkJson(
+        ProjectScopeJson Project,
+        PhotoRatingResultJson Photo,
+        UserMarkJson Mark);
 
     private sealed record StatusJson(
         string Scope,
@@ -2409,6 +2545,14 @@ public static partial class CliApp
         int? HttpStatus,
         string? Error,
         DateTimeOffset CreatedAt);
+
+    private sealed record UserMarkJson(
+        long Id,
+        long PhotoId,
+        string Decision,
+        int Stars,
+        string Note,
+        DateTimeOffset UpdatedAt);
 
     private sealed record ProductRatingJson(
         string PhotoType,

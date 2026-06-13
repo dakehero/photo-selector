@@ -17,6 +17,7 @@
 - `status` and `reset ratings` expose catalog state and rerating control without exposing worker-management commands.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
 - `results [directory] --photo <photo-id|base-name> --audit [--json]` shows one photo result with redacted request and raw model audit logs for decision tracing.
+- `mark <directory> <photo-id|base-name>` saves manual keep/maybe/reject/unreviewed decisions, stars, and notes without changing AI ratings.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
 - Rating work is invoked through `pick`, `scan`, `rate`, `coach`, or `arena`, not a user-facing `process` or `rate <db>` command.

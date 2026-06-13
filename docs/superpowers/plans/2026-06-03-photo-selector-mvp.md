@@ -470,6 +470,7 @@ Test the CLI can:
 - `reset ratings <directory>` delete ratings, preserve audit logs, and requeue work.
 - `results [directory]` summarize rating coverage, keep/maybe/reject counts, and top candidates.
 - `results [directory] --photo <photo-id|base-name> --audit --json` emit a parseable decision trace.
+- `mark <directory> <photo-id|base-name> --decision <decision>` persist a manual review decision, stars, and note.
 - `export <keep|maybe|reject> <directory> <target>` copy matching JPG+RAW pairs without requiring SQLite paths.
 - `projects list --json`, `open <project-id|directory> --json`, and `photos list --project <id> --json` emit parseable JSON.
 
@@ -499,6 +500,7 @@ photo-selector status [directory]
 photo-selector reset ratings <directory> [--with-audit]
 photo-selector results [directory]
 photo-selector results [directory] --photo <photo-id|base-name> [--audit] [--json]
+photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]
 photo-selector export <keep|maybe|reject> <directory> <target>
 photo-selector projects list --json
 photo-selector open <project-id|directory> --json
@@ -522,6 +524,8 @@ Do not reintroduce user-facing `import`, `process`, `flush`, or `worker` command
 `results` should summarize rating coverage, keep/maybe/reject counts, and top candidates for all projects or one directory.
 
 `results --photo <photo-id|base-name> --audit` should expose one photo's redacted request, raw model message, raw provider response, status, and parse error when present.
+
+`mark` should save manual review decisions separately from AI ratings.
 
 `export` should copy JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
