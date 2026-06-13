@@ -2030,6 +2030,7 @@ public static partial class CliApp
     private static PhotoJson ToPhotoJson(PhotoItem photo, ProjectDatabase database)
     {
         var latestRating = database.ListRatings(photo.Id).FirstOrDefault();
+        var userMark = database.GetUserMark(photo.Id);
         return new PhotoJson(
             photo.Id,
             photo.ProjectId,
@@ -2049,7 +2050,8 @@ public static partial class CliApp
                     latestRating.Category,
                     ParseCriteriaJson(latestRating.CriteriaJson),
                     latestRating.Reason,
-                    latestRating.CreatedAt));
+                    latestRating.CreatedAt),
+            userMark is null ? null : ToUserMarkJson(userMark));
     }
 
     private static ProductRatingJson? ToProductRatingJson(AiRating? rating)
@@ -2625,7 +2627,8 @@ public static partial class CliApp
         string? RawPath,
         DateTimeOffset? CaptureTime,
         string ImportStatus,
-        RatingJson? LatestRating);
+        RatingJson? LatestRating,
+        UserMarkJson? UserMark);
 
     private sealed record RatingJson(
         long Id,

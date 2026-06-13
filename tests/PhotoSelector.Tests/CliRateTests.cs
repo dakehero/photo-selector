@@ -340,6 +340,13 @@ public sealed class CliRateTests
         Assert.Equal("keep", mark.Decision);
         Assert.Equal(5, mark.Stars);
         Assert.Equal("portfolio candidate", mark.Note);
+
+        var photosOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["photos", "list", "--project", project.Id.ToString(), "--json"], photosOutput, TextWriter.Null));
+        using var photosJson = JsonDocument.Parse(photosOutput.ToString());
+        var photoJson = Assert.Single(photosJson.RootElement.GetProperty("photos").EnumerateArray());
+        Assert.Equal("keep", photoJson.GetProperty("userMark").GetProperty("decision").GetString());
+        Assert.Equal(5, photoJson.GetProperty("userMark").GetProperty("stars").GetInt32());
     }
 
     [Fact]
