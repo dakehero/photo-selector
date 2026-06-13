@@ -84,7 +84,7 @@ public static partial class CliApp
         root.Subcommands.Add(CreateRelayCommand("rate", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("coach", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("arena", _ => RunArena(args, output, error, secretStore, ratingClient), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("scan", _ => RunScan(args, output, error, secretStore, ratingClient), allowUnmatched: true));
+        root.Subcommands.Add(BuildScanCommand(output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildStatusCommand(output, error));
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(BuildResultsCommand(output, error));
@@ -412,39 +412,41 @@ public static partial class CliApp
         return result.Rating is null ? 1 : 0;
     }
 
-    private static int RunScan(
-        string[] args,
+    private static Command BuildScanCommand(
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length < 2)
-        {
-            return WriteUsage(error);
-        }
+        var command = new Command("scan", "Synchronously import and rate a directory.");
+        var directoryArgument = new Argument<string>("directory");
+        var modelOption = new Option<string?>("--model");
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(modelOption);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunScan(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetValue(modelOption),
+                parseResult.GetValue(jsonOption),
+                output,
+                error,
+                secretStore,
+                ratingClient));
+        return command;
+    }
 
-        var json = false;
-        var modelOverride = default(string?);
-        for (var index = 2; index < args.Length; index++)
-        {
-            if (args[index] == "--json")
-            {
-                json = true;
-                continue;
-            }
-
-            if (args[index] == "--model" && index + 1 < args.Length && !string.IsNullOrWhiteSpace(args[index + 1]))
-            {
-                modelOverride = args[index + 1];
-                index++;
-                continue;
-            }
-
-            return WriteUsage(error);
-        }
-
-        var result = ImportDirectory(args[1], error);
+    private static int RunScan(
+        string directory,
+        string? modelOverride,
+        bool json,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var result = ImportDirectory(directory, error);
         if (result is null)
         {
             return 1;
