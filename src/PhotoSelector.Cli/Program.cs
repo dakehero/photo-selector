@@ -83,7 +83,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildPickCommand(output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildSinglePhotoProductCommand("rate", ProductCommandKind.Rate, output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildSinglePhotoProductCommand("coach", ProductCommandKind.Coach, output, error, secretStore, ratingClient));
-        root.Subcommands.Add(CreateRelayCommand("arena", _ => RunArena(args, output, error, secretStore, ratingClient), allowUnmatched: true));
+        root.Subcommands.Add(BuildArenaCommand(output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildScanCommand(output, error, secretStore, ratingClient));
         root.Subcommands.Add(BuildStatusCommand(output, error));
         root.Subcommands.Add(BuildResetCommand(output, error));
@@ -582,29 +582,74 @@ public static partial class CliApp
         }
     }
 
-    private static int RunArena(
-        string[] args,
+    private static Command BuildArenaCommand(
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient)
     {
-        if (args.Length >= 2 && args[1] == "list")
+        var command = new Command("arena", "Compare models against the same photo set.");
+        var directoryArgument = new Argument<string>("directory");
+        var modelsOption = new Option<string>("--models")
         {
-            return RunArenaList(args, output, error);
-        }
+            Required = true,
+        };
+        var limitOption = new Option<int?>("--limit");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(modelsOption);
+        command.Options.Add(limitOption);
+        command.SetAction(parseResult =>
+            RunArena(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetRequiredValue(modelsOption),
+                parseResult.GetValue(limitOption),
+                output,
+                error,
+                secretStore,
+                ratingClient));
 
-        if (args.Length >= 2 && args[1] == "show")
+        var list = new Command("list", "List arena runs.");
+        var listDirectoryArgument = new Argument<string?>("directory")
         {
-            return RunArenaShow(args, output, error);
-        }
+            Arity = ArgumentArity.ZeroOrOne,
+        };
+        var listJsonOption = new Option<bool>("--json");
+        list.Arguments.Add(listDirectoryArgument);
+        list.Options.Add(listJsonOption);
+        list.SetAction(parseResult =>
+            RunArenaList(
+                parseResult.GetValue(listDirectoryArgument),
+                parseResult.GetValue(listJsonOption),
+                output,
+                error));
+        command.Subcommands.Add(list);
 
-        if (args.Length is not (4 or 6) || args[2] != "--models")
-        {
-            return WriteUsage(error);
-        }
+        var show = new Command("show", "Show one arena run.");
+        var runIdArgument = new Argument<long>("run-id");
+        var showJsonOption = new Option<bool>("--json");
+        show.Arguments.Add(runIdArgument);
+        show.Options.Add(showJsonOption);
+        show.SetAction(parseResult =>
+            RunArenaShow(
+                parseResult.GetRequiredValue(runIdArgument),
+                parseResult.GetValue(showJsonOption),
+                output,
+                error));
+        command.Subcommands.Add(show);
 
-        var models = args[3]
+        return command;
+    }
+
+    private static int RunArena(
+        string directory,
+        string modelsCsv,
+        int? limitOverride,
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IPhotoRatingClient? ratingClient)
+    {
+        var models = modelsCsv
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(model => !string.IsNullOrWhiteSpace(model))
             .ToArray();
@@ -614,16 +659,14 @@ public static partial class CliApp
             return 1;
         }
 
-        var limit = 8;
-        if (args.Length == 6)
+        var limit = limitOverride ?? 8;
+        if (limit < 1)
         {
-            if (args[4] != "--limit" || !int.TryParse(args[5], out limit) || limit < 1)
-            {
-                return WriteUsage(error);
-            }
+            error.WriteLine("--limit must be a positive integer.");
+            return 1;
         }
 
-        var import = ImportDirectory(args[1], error);
+        var import = ImportDirectory(directory, error);
         if (import is null)
         {
             return 1;
@@ -702,23 +745,16 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunArenaList(string[] args, TextWriter output, TextWriter error)
+    private static int RunArenaList(string? selector, bool json, TextWriter output, TextWriter error)
     {
-        var json = args.Contains("--json", StringComparer.Ordinal);
-        var selectors = args.Skip(2).Where(arg => arg != "--json").ToArray();
-        if (selectors.Length > 1)
-        {
-            return WriteUsage(error);
-        }
-
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (selectors.Length == 1)
+        if (!string.IsNullOrWhiteSpace(selector))
         {
-            project = FindProject(database, selectors[0]);
+            project = FindProject(database, selector);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {selectors[0]}");
+                error.WriteLine($"Project not found: {selector}");
                 return 1;
             }
         }
@@ -745,13 +781,12 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunArenaShow(string[] args, TextWriter output, TextWriter error)
+    private static int RunArenaShow(long arenaRunId, bool json, TextWriter output, TextWriter error)
     {
-        var json = args.Contains("--json", StringComparer.Ordinal);
-        var values = args.Skip(2).Where(arg => arg != "--json").ToArray();
-        if (values.Length != 1 || !long.TryParse(values[0], out var arenaRunId) || arenaRunId < 1)
+        if (arenaRunId < 1)
         {
-            return WriteUsage(error);
+            error.WriteLine("run-id must be a positive integer.");
+            return 1;
         }
 
         using var database = OpenCatalogDatabase();
