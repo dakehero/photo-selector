@@ -78,7 +78,7 @@ public static partial class CliApp
         var root = new RootCommand("Photo Selector");
         root.Action = new RelayAction(_ => WriteUsage(error));
         root.Subcommands.Add(CreateRelayCommand("help", _ => RunHelp(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("auth", _ => RunAuth(args, output, error, input, secretStore), allowUnmatched: true));
+        root.Subcommands.Add(BuildAuthCommand(output, error, input, secretStore));
         root.Subcommands.Add(BuildConfigCommand(output, error));
         root.Subcommands.Add(CreateRelayCommand("pick", _ => RunPick(args, output, error, secretStore, ratingClient), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("rate", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Rate), allowUnmatched: true));
@@ -1553,26 +1553,55 @@ public static partial class CliApp
         return new RatingContext(store, profile, apiKey, baseUrl, ratingClient ?? ownedClient!, ownedClient);
     }
 
-    private static int RunAuth(string[] args, TextWriter output, TextWriter error, TextReader input, ISecretStore secretStore)
+    private static Command BuildAuthCommand(
+        TextWriter output,
+        TextWriter error,
+        TextReader input,
+        ISecretStore secretStore)
     {
-        if (args.Length < 2)
-        {
-            return WriteUsage(error);
-        }
+        var command = new Command("auth", "Manage shared API credentials.");
+        command.Action = new RelayAction(_ => WriteUsage(error));
 
-        return args[1] switch
-        {
-            "login" => RunAuthLogin(args, output, error, input, secretStore),
-            "status" => RunAuthStatus(args, output, error, secretStore),
-            "logout" => RunAuthLogout(args, output, error, secretStore),
-            _ => WriteUsage(error),
-        };
+        var login = new Command("login", "Store an API key in the configured secret store.");
+        var loginProfileOption = new Option<string?>("--profile");
+        var apiKeyStdinOption = new Option<bool>("--api-key-stdin");
+        login.Options.Add(loginProfileOption);
+        login.Options.Add(apiKeyStdinOption);
+        login.SetAction(parseResult =>
+            RunAuthLogin(
+                parseResult.GetValue(loginProfileOption) ?? "default",
+                parseResult.GetValue(apiKeyStdinOption),
+                output,
+                error,
+                input,
+                secretStore));
+        command.Subcommands.Add(login);
+
+        var status = new Command("status", "Show API key availability.");
+        var statusProfileOption = new Option<string?>("--profile");
+        status.Options.Add(statusProfileOption);
+        status.SetAction(parseResult =>
+            RunAuthStatus(parseResult.GetValue(statusProfileOption), output, secretStore));
+        command.Subcommands.Add(status);
+
+        var logout = new Command("logout", "Remove an API key reference.");
+        var logoutProfileOption = new Option<string?>("--profile");
+        logout.Options.Add(logoutProfileOption);
+        logout.SetAction(parseResult =>
+            RunAuthLogout(parseResult.GetValue(logoutProfileOption) ?? "default", output, secretStore));
+        command.Subcommands.Add(logout);
+
+        return command;
     }
 
-    private static int RunAuthLogin(string[] args, TextWriter output, TextWriter error, TextReader input, ISecretStore secretStore)
+    private static int RunAuthLogin(
+        string profileName,
+        bool useStdin,
+        TextWriter output,
+        TextWriter error,
+        TextReader input,
+        ISecretStore secretStore)
     {
-        var profileName = GetOption(args, "--profile") ?? "default";
-        var useStdin = args.Contains("--api-key-stdin", StringComparer.Ordinal);
         if (!useStdin)
         {
             error.WriteLine("Use --api-key-stdin to read the API key from standard input.");
@@ -1601,11 +1630,11 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunAuthStatus(string[] args, TextWriter output, TextWriter error, ISecretStore secretStore)
+    private static int RunAuthStatus(string? profileNameOverride, TextWriter output, ISecretStore secretStore)
     {
-        var profileName = GetOption(args, "--profile") ?? new ConfigStore().Load().ActiveProfile;
         var store = new ConfigStore();
         var config = store.Load();
+        var profileName = profileNameOverride ?? config.ActiveProfile;
         var profile = config.GetOrCreateProfile(profileName);
         var resolution = ApiKeyResolver.Resolve(profile, secretStore);
 
@@ -1617,9 +1646,8 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunAuthLogout(string[] args, TextWriter output, TextWriter error, ISecretStore secretStore)
+    private static int RunAuthLogout(string profileName, TextWriter output, ISecretStore secretStore)
     {
-        var profileName = GetOption(args, "--profile") ?? "default";
         var keyRef = $"photo-selector/{profileName}";
         secretStore.Delete(keyRef);
 
@@ -1999,19 +2027,6 @@ public static partial class CliApp
     {
         WriteHelpOverview(error);
         return 1;
-    }
-
-    private static string? GetOption(string[] args, string option)
-    {
-        for (var index = 0; index < args.Length - 1; index++)
-        {
-            if (args[index] == option)
-            {
-                return args[index + 1];
-            }
-        }
-
-        return null;
     }
 
     [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
