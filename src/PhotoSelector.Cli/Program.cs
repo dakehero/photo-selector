@@ -85,8 +85,8 @@ public static partial class CliApp
         root.Subcommands.Add(CreateRelayCommand("coach", _ => RunSinglePhotoProductCommand(args, output, error, secretStore, ratingClient, ProductCommandKind.Coach), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("arena", _ => RunArena(args, output, error, secretStore, ratingClient), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("scan", _ => RunScan(args, output, error, secretStore, ratingClient), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("status", _ => RunStatus(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("reset", _ => RunReset(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(BuildStatusCommand(output, error));
+        root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(CreateRelayCommand("results", _ => RunResults(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(CreateRelayCommand("export", _ => RunExport(args, output, error), allowUnmatched: true));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
@@ -705,23 +705,35 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunStatus(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildStatusCommand(TextWriter output, TextWriter error)
     {
-        var json = args.Contains("--json", StringComparer.Ordinal);
-        var selectors = args.Skip(1).Where(arg => arg != "--json").ToArray();
-        if (selectors.Length > 1)
+        var command = new Command("status", "Show rating work and result status.");
+        var directoryArgument = new Argument<string?>("directory")
         {
-            return WriteUsage(error);
-        }
+            Arity = ArgumentArity.ZeroOrOne,
+        };
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunStatus(
+                parseResult.GetValue(directoryArgument),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
 
+    private static int RunStatus(string? selector, bool json, TextWriter output, TextWriter error)
+    {
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
-        if (selectors.Length == 1)
+        if (!string.IsNullOrWhiteSpace(selector))
         {
-            project = FindProject(database, selectors[0]);
+            project = FindProject(database, selector);
             if (project is null)
             {
-                error.WriteLine($"Project not found: {selectors[0]}");
+                error.WriteLine($"Project not found: {selector}");
                 return 1;
             }
         }
@@ -747,29 +759,34 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunReset(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildResetCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length is not (3 or 4) || args[1] != "ratings")
-        {
-            return WriteUsage(error);
-        }
+        var command = new Command("reset", "Reset generated local data.");
+        command.Action = new RelayAction(_ => WriteUsage(error));
 
-        var includeAudit = false;
-        if (args.Length == 4)
-        {
-            if (args[3] != "--with-audit")
-            {
-                return WriteUsage(error);
-            }
+        var ratings = new Command("ratings", "Reset AI ratings for a project.");
+        var directoryArgument = new Argument<string>("directory");
+        var withAuditOption = new Option<bool>("--with-audit");
+        ratings.Arguments.Add(directoryArgument);
+        ratings.Options.Add(withAuditOption);
+        ratings.SetAction(parseResult =>
+            RunResetRatings(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetValue(withAuditOption),
+                output,
+                error));
+        command.Subcommands.Add(ratings);
 
-            includeAudit = true;
-        }
+        return command;
+    }
 
+    private static int RunResetRatings(string selector, bool includeAudit, TextWriter output, TextWriter error)
+    {
         using var database = OpenCatalogDatabase();
-        var project = FindProject(database, args[2]);
+        var project = FindProject(database, selector);
         if (project is null)
         {
-            error.WriteLine($"Project not found: {args[2]}");
+            error.WriteLine($"Project not found: {selector}");
             return 1;
         }
 
