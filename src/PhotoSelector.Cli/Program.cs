@@ -894,19 +894,25 @@ public static partial class CliApp
         {
             Arity = ArgumentArity.ZeroOrOne,
         };
+        var photoOption = new Option<string?>("--photo");
+        var auditOption = new Option<bool>("--audit");
         var jsonOption = new Option<bool>("--json");
         command.Arguments.Add(directoryArgument);
+        command.Options.Add(photoOption);
+        command.Options.Add(auditOption);
         command.Options.Add(jsonOption);
         command.SetAction(parseResult =>
             RunResults(
                 parseResult.GetValue(directoryArgument),
+                parseResult.GetValue(photoOption),
+                parseResult.GetValue(auditOption),
                 parseResult.GetValue(jsonOption),
                 output,
                 error));
         return command;
     }
 
-    private static int RunResults(string? selector, bool json, TextWriter output, TextWriter error)
+    private static int RunResults(string? selector, string? photoSelector, bool audit, bool json, TextWriter output, TextWriter error)
     {
         using var database = OpenCatalogDatabase();
         PhotoProject? project = null;
@@ -920,6 +926,17 @@ public static partial class CliApp
             }
         }
 
+        if (audit && string.IsNullOrWhiteSpace(photoSelector))
+        {
+            error.WriteLine("--audit requires --photo.");
+            return 1;
+        }
+
+        if (!string.IsNullOrWhiteSpace(photoSelector))
+        {
+            return RunPhotoResults(database, project, photoSelector, audit, json, output, error);
+        }
+
         var results = BuildResultsJson(database, project);
         if (json)
         {
@@ -929,6 +946,100 @@ public static partial class CliApp
 
         WriteResultsSummary(results, output);
         return 0;
+    }
+
+    private static int RunPhotoResults(
+        ProjectDatabase database,
+        PhotoProject? project,
+        string photoSelector,
+        bool audit,
+        bool json,
+        TextWriter output,
+        TextWriter error)
+    {
+        var match = FindPhoto(database, project, photoSelector);
+        if (match is null)
+        {
+            error.WriteLine($"Photo not found: {photoSelector}");
+            return 1;
+        }
+
+        var (matchedProject, photo) = match.Value;
+        var result = ToPhotoResultJson(new PhotoResult(
+            photo,
+            database.ListRatings(photo.Id).FirstOrDefault(),
+            database.ListRatingJobs(photo.ProjectId)
+                .Where(job => job.PhotoId == photo.Id)
+                .OrderByDescending(job => job.UpdatedAt)
+                .FirstOrDefault()));
+        var auditLogs = audit
+            ? database.ListRatingAuditLogs(photo.Id).Select(ToRatingAuditJson).ToArray()
+            : [];
+        var payload = new ResultsPhotoJson(
+            project is null ? "all" : "project",
+            ToProjectScopeJson(matchedProject)!,
+            result,
+            auditLogs);
+
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(payload, CliJsonContext.Default.ResultsPhotoJson));
+            return 0;
+        }
+
+        WritePhotoResult(payload, output);
+        return 0;
+    }
+
+    private static (PhotoProject Project, PhotoItem Photo)? FindPhoto(
+        ProjectDatabase database,
+        PhotoProject? project,
+        string photoSelector)
+    {
+        var projects = project is null ? database.ListProjects() : [project];
+        if (long.TryParse(photoSelector, out var photoId))
+        {
+            var photo = database.GetPhoto(photoId);
+            if (photo is null || projects.All(item => item.Id != photo.ProjectId))
+            {
+                return null;
+            }
+
+            var photoProject = projects.First(item => item.Id == photo.ProjectId);
+            return (photoProject, photo);
+        }
+
+        var matches = projects
+            .SelectMany(item => database.ListPhotos(item.Id).Select(photo => (Project: item, Photo: photo)))
+            .Where(item => string.Equals(item.Photo.BaseName, photoSelector, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static void WritePhotoResult(ResultsPhotoJson result, TextWriter output)
+    {
+        output.WriteLine($"Project: {result.Project.SourceDirectory}");
+        if (result.Photo.Score is null)
+        {
+            output.WriteLine($"{result.Photo.Status} {result.Photo.BaseName}");
+        }
+        else
+        {
+            output.WriteLine(
+                $"{result.Photo.Score.Value.ToString("0.0", CultureInfo.InvariantCulture)} {result.Photo.Category} {result.Photo.BaseName} - {result.Photo.Reason}");
+        }
+
+        if (result.Audit.Length == 0)
+        {
+            return;
+        }
+
+        output.WriteLine("audit:");
+        foreach (var item in result.Audit)
+        {
+            output.WriteLine(
+                $"  {item.CreatedAt:O} {item.Provider}/{item.Model} status={item.HttpStatus?.ToString(CultureInfo.InvariantCulture) ?? "none"} error={item.Error ?? "none"}");
+        }
     }
 
     private static ResultsJson BuildResultsJson(ProjectDatabase database, PhotoProject? project)
@@ -1207,6 +1318,23 @@ public static partial class CliApp
             item.Rating.Reason,
             "rated",
             null);
+    }
+
+    private static PhotoRatingAuditJson ToRatingAuditJson(PhotoRatingAuditLog audit)
+    {
+        return new PhotoRatingAuditJson(
+            audit.Id,
+            audit.PhotoId,
+            audit.RatingId,
+            audit.Provider,
+            audit.Model,
+            audit.Prompt,
+            audit.RequestJsonRedacted,
+            audit.RawMessageContent,
+            audit.RawResponseJson,
+            audit.HttpStatus,
+            audit.Error,
+            audit.CreatedAt);
     }
 
     private static Command BuildExportCommand(TextWriter output, TextWriter error)
@@ -1935,12 +2063,16 @@ public static partial class CliApp
             ["photo-selector reset ratings \"C:\\Photos\\Shoot\""]),
         new(
             "results",
-            "photo-selector results [directory]",
-            "Show saved rating coverage, top candidates, and all ranked results.",
+            "photo-selector results [directory] [--photo <photo-id|base-name>] [--audit] [--json]",
+            "Show saved rating coverage, ranked results, or one photo decision trace.",
             [new HelpArgumentJson("directory", false, "path", "directory", "Optional project directory filter.")],
-            [JsonOption],
-            new HelpOutputJson(true, true, "Rating results summary."),
-            ["photo-selector results \"C:\\Photos\\Shoot\" --json"]),
+            [
+                new HelpOptionJson("--photo", "string", false, [], "Show one photo by id or base name."),
+                new HelpOptionJson("--audit", "boolean", false, [], "Include redacted request and raw model audit logs for --photo."),
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Rating results summary or one photo audit trace."),
+            ["photo-selector results \"C:\\Photos\\Shoot\" --json", "photo-selector results \"C:\\Photos\\Shoot\" --photo DSC_0001 --audit --json"]),
         new(
             "export",
             "photo-selector export <keep|maybe|reject> <directory> <target>",
@@ -2096,6 +2228,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(SinglePhotoProductJson))]
     [JsonSerializable(typeof(ScanJson))]
     [JsonSerializable(typeof(ResultsJson))]
+    [JsonSerializable(typeof(ResultsPhotoJson))]
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
     [JsonSerializable(typeof(ArenaShowJson))]
@@ -2171,6 +2304,12 @@ public static partial class CliApp
         PhotoRatingResultJson[] Top,
         PhotoRatingResultJson[] All);
 
+    private sealed record ResultsPhotoJson(
+        string Scope,
+        ProjectScopeJson Project,
+        PhotoRatingResultJson Photo,
+        PhotoRatingAuditJson[] Audit);
+
     private sealed record StatusJson(
         string Scope,
         ProjectScopeJson? Project,
@@ -2243,6 +2382,20 @@ public static partial class CliApp
         string? Reason,
         string Status,
         string? Error);
+
+    private sealed record PhotoRatingAuditJson(
+        long Id,
+        long PhotoId,
+        long? RatingId,
+        string Provider,
+        string Model,
+        string Prompt,
+        string RequestJsonRedacted,
+        string RawMessageContent,
+        string RawResponseJson,
+        int? HttpStatus,
+        string? Error,
+        DateTimeOffset CreatedAt);
 
     private sealed record ProductRatingJson(
         string PhotoType,

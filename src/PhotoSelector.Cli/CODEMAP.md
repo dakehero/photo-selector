@@ -16,10 +16,10 @@
 - `scan <directory>` is the synchronous automation/debug fast path: index a directory, then rate pending or failed photos with the default rating prompt before returning.
 - `status` and `reset ratings` expose catalog state and rerating control without exposing worker-management commands.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
+- `results [directory] --photo <photo-id|base-name> --audit [--json]` shows one photo result with redacted request and raw model audit logs for decision tracing.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
 - Rating work is invoked through `pick`, `scan`, `rate`, `coach`, or `arena`, not a user-facing `process` or `rate <db>` command.
-- Audit product commands are not wired yet; track remaining design work in Superpowers specs/plans instead of shipping temporary database-path commands.
 
 ## Dependencies
 

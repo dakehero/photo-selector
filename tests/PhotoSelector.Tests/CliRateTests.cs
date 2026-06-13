@@ -201,6 +201,58 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Results_photo_audit_json_outputs_decision_trace()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        long photoId;
+        long ratingId;
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+            var photo = Assert.Single(database.ListPhotos(projectId));
+            photoId = photo.Id;
+            ratingId = database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+            database.SaveRatingAuditLog(
+                photo.Id,
+                ratingId,
+                "openrouter",
+                "model-a",
+                "prompt text",
+                """{"model":"model-a","image_url":"[redacted-data-url]"}""",
+                """{"photo_type":"street","score":8.4}""",
+                """{"choices":[{"message":{"content":"{\"score\":8.4}"}}]}""",
+                200,
+                null);
+        }
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["results", sourceDirectory, "--photo", "IMG_0001", "--audit", "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.Equal(photoId, json.RootElement.GetProperty("photo").GetProperty("photoId").GetInt64());
+        Assert.Equal("IMG_0001", json.RootElement.GetProperty("photo").GetProperty("baseName").GetString());
+        var audit = Assert.Single(json.RootElement.GetProperty("audit").EnumerateArray());
+        Assert.Equal(ratingId, audit.GetProperty("ratingId").GetInt64());
+        Assert.Equal("openrouter", audit.GetProperty("provider").GetString());
+        Assert.Equal("model-a", audit.GetProperty("model").GetString());
+        Assert.Equal("prompt text", audit.GetProperty("prompt").GetString());
+        Assert.Contains("[redacted-data-url]", audit.GetProperty("requestJsonRedacted").GetString());
+        Assert.Contains("\"score\":8.4", audit.GetProperty("rawMessageContent").GetString());
+        Assert.Equal(200, audit.GetProperty("httpStatus").GetInt32());
+    }
+
+    [Fact]
     public void Export_keep_copies_latest_keep_rated_jpeg_and_raw_pairs_from_catalog()
     {
         using var tempDirectory = new TempDirectory();
