@@ -88,7 +88,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildStatusCommand(output, error));
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(CreateRelayCommand("results", _ => RunResults(args, output, error), allowUnmatched: true));
-        root.Subcommands.Add(CreateRelayCommand("export", _ => RunExport(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(BuildExportCommand(output, error));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
         root.Subcommands.Add(BuildOpenCommand(output, error));
         root.Subcommands.Add(BuildPhotosCommand(output, error));
@@ -1107,14 +1107,27 @@ public static partial class CliApp
             null);
     }
 
-    private static int RunExport(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildExportCommand(TextWriter output, TextWriter error)
     {
-        if (args.Length != 4)
-        {
-            return WriteUsage(error);
-        }
+        var command = new Command("export", "Copy rated JPEG and RAW pairs to an export directory.");
+        var categoryArgument = new Argument<string>("category");
+        var directoryArgument = new Argument<string>("directory");
+        var targetArgument = new Argument<string>("target");
+        command.Arguments.Add(categoryArgument);
+        command.Arguments.Add(directoryArgument);
+        command.Arguments.Add(targetArgument);
+        command.SetAction(parseResult =>
+            RunExport(
+                parseResult.GetRequiredValue(categoryArgument),
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetRequiredValue(targetArgument),
+                output,
+                error));
+        return command;
+    }
 
-        var category = args[1];
+    private static int RunExport(string category, string selector, string target, TextWriter output, TextWriter error)
+    {
         if (!IsRatingCategory(category))
         {
             error.WriteLine($"Unknown export filter: {category}");
@@ -1122,10 +1135,10 @@ public static partial class CliApp
         }
 
         using var database = OpenCatalogDatabase();
-        var project = FindProject(database, args[2]);
+        var project = FindProject(database, selector);
         if (project is null)
         {
-            error.WriteLine($"Project not found: {args[2]}");
+            error.WriteLine($"Project not found: {selector}");
             return 1;
         }
 
@@ -1136,7 +1149,7 @@ public static partial class CliApp
                 category,
                 StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var result = new ExportService().Export(photos, args[3], DateTimeOffset.UtcNow);
+        var result = new ExportService().Export(photos, target, DateTimeOffset.UtcNow);
 
         output.WriteLine(
             $"Exported {result.ExportedFiles.Count} file(s) from {photos.Length} photo(s). Directory: {result.ExportDirectory}");
