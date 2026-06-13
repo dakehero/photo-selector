@@ -47,13 +47,18 @@ public static partial class CliApp
 
         try
         {
-            if (!IsKnownTopLevelCommand(args[0]))
+            var root = BuildCommandLine(output, error, input, secretStore, ratingClient);
+            var parseResult = root.Parse(args);
+            if (parseResult.Errors.Count > 0)
             {
+                foreach (var parseError in parseResult.Errors)
+                {
+                    error.WriteLine(parseError.Message);
+                }
+
                 return WriteUsage(error);
             }
 
-            var root = BuildCommandLine(args, output, error, input, secretStore, ratingClient);
-            var parseResult = root.Parse(args);
             return parseResult.Invoke(new InvocationConfiguration
             {
                 Output = output,
@@ -68,7 +73,6 @@ public static partial class CliApp
     }
 
     private static RootCommand BuildCommandLine(
-        string[] args,
         TextWriter output,
         TextWriter error,
         TextReader input,
@@ -93,37 +97,6 @@ public static partial class CliApp
         root.Subcommands.Add(BuildOpenCommand(output, error));
         root.Subcommands.Add(BuildPhotosCommand(output, error));
         return root;
-    }
-
-    private static bool IsKnownTopLevelCommand(string command)
-    {
-        return command is
-            "help" or "--help" or "-h" or
-            "auth" or
-            "config" or
-            "pick" or
-            "rate" or
-            "coach" or
-            "arena" or
-            "scan" or
-            "status" or
-            "reset" or
-            "results" or
-            "export" or
-            "projects" or
-            "open" or
-            "photos";
-    }
-
-    private static Command CreateRelayCommand(
-        string name,
-        Func<ParseResult, int> action,
-        bool allowUnmatched = false)
-    {
-        var command = new Command(name);
-        command.TreatUnmatchedTokensAsErrors = !allowUnmatched;
-        command.Action = new RelayAction(action);
-        return command;
     }
 
     private sealed class RelayAction(Func<ParseResult, int> action) : SynchronousCommandLineAction
