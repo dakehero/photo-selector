@@ -77,7 +77,7 @@ public static partial class CliApp
     {
         var root = new RootCommand("Photo Selector");
         root.Action = new RelayAction(_ => WriteUsage(error));
-        root.Subcommands.Add(CreateRelayCommand("help", _ => RunHelp(args, output, error), allowUnmatched: true));
+        root.Subcommands.Add(BuildHelpCommand(output, error));
         root.Subcommands.Add(BuildAuthCommand(output, error, input, secretStore));
         root.Subcommands.Add(BuildConfigCommand(output, error));
         root.Subcommands.Add(BuildPickCommand(output, error, secretStore, ratingClient));
@@ -134,20 +134,27 @@ public static partial class CliApp
         }
     }
 
-    private static int RunHelp(string[] args, TextWriter output, TextWriter error)
+    private static Command BuildHelpCommand(TextWriter output, TextWriter error)
     {
-        var json = false;
-        var selectorParts = new List<string>();
-        for (var index = 1; index < args.Length; index++)
+        var command = new Command("help", "Show human or machine-readable command help.");
+        var commandArgument = new Argument<string[]>("command")
         {
-            if (args[index] == "--json")
-            {
-                json = true;
-                continue;
-            }
+            Arity = ArgumentArity.ZeroOrMore,
+        };
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(commandArgument);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunHelp(
+                parseResult.GetValue(commandArgument) ?? [],
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
 
-            selectorParts.Add(args[index]);
-        }
+    private static int RunHelp(IReadOnlyList<string> selectorParts, bool json, TextWriter output, TextWriter error)
+    {
 
         if (selectorParts.Count == 0)
         {
