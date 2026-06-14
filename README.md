@@ -24,12 +24,28 @@ Early CLI MVP. Expect prompt, model, and workflow tuning to continue.
 
 ## Build
 
+Build and test from source:
+
 ```powershell
 dotnet build
 dotnet test
 ```
 
-NativeAOT CLI build for Windows ARM64:
+Run the CLI from source:
+
+```powershell
+dotnet run --project src\PhotoSelector.Cli -- help
+```
+
+Publish a self-contained NativeAOT CLI for your platform:
+
+```powershell
+dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r <RID> --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-<RID>-aot
+```
+
+Common runtime identifiers include `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`.
+
+Example for Windows ARM64:
 
 ```powershell
 dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r win-arm64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-win-arm64-aot-latest
