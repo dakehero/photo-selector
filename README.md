@@ -51,6 +51,19 @@ Example for Windows ARM64:
 dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r win-arm64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-win-arm64-aot-latest
 ```
 
+## Release
+
+GitHub Releases are built by `.github/workflows/release.yml`.
+
+Create and push a semantic version tag:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow runs tests, publishes NativeAOT CLI packages for Windows, Linux, and macOS, then uploads them to the GitHub Release.
+
 ## Quick Start
 
 Configure a provider:

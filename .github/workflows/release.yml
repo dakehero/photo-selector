@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, such as v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+  publish:
+    name: Publish ${{ matrix.rid }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-2022
+            archive: zip
+          - rid: win-arm64
+            os: windows-11-arm
+            archive: zip
+          - rid: linux-x64
+            os: ubuntu-24.04
+            archive: tar.gz
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - rid: osx-x64
+            os: macos-15-intel
+            archive: tar.gz
+          - rid: osx-arm64
+            os: macos-15
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install NativeAOT dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Release tag is required."
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Publish NativeAOT CLI
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $out = Join-Path "artifacts" "photo-selector-$version-$rid"
+          dotnet publish src/PhotoSelector.Cli/PhotoSelector.Cli.csproj `
+            --configuration Release `
+            --runtime $rid `
+            --self-contained true `
+            -p:PublishAot=true `
+            -p:StripSymbols=true `
+            -o $out
+          Copy-Item README.md $out
+          Copy-Item LICENSE $out
+
+      - name: Package release asset
+        shell: pwsh
+        run: |
+          $rid = "${{ matrix.rid }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $archive = "${{ matrix.archive }}"
+          $out = Join-Path "artifacts" "photo-selector-$version-$rid"
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          if ($archive -eq "zip") {
+            Compress-Archive -Path "$out/*" -DestinationPath "dist/photo-selector-$version-$rid.zip" -Force
+          } else {
+            tar -czf "dist/photo-selector-$version-$rid.tar.gz" -C $out .
+          }
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-selector-${{ steps.version.outputs.version }}-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then
+            tag="${{ github.ref_name }}"
+          fi
+          if [ -z "$tag" ]; then
+            echo "Release tag is required." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --generate-notes
+          fi
