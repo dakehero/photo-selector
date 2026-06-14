@@ -40,21 +40,27 @@ jobs:
       matrix:
         include:
           - rid: win-x64
+            package: windows-x64
             os: windows-2022
             archive: zip
           - rid: win-arm64
+            package: windows-arm64
             os: windows-11-arm
             archive: zip
           - rid: linux-x64
+            package: linux-x64
             os: ubuntu-24.04
             archive: tar.gz
           - rid: linux-arm64
+            package: linux-arm64
             os: ubuntu-24.04-arm
             archive: tar.gz
           - rid: osx-x64
+            package: macos-x64
             os: macos-15-intel
             archive: tar.gz
           - rid: osx-arm64
+            package: macos-arm64
             os: macos-15
             archive: tar.gz
     runs-on: ${{ matrix.os }}
@@ -106,6 +112,11 @@ jobs:
             Get-ChildItem -Path $out -Recurse -Force -Filter $pattern -ErrorAction SilentlyContinue |
               Remove-Item -Recurse -Force
           }
+          if ($rid.StartsWith("win-", [System.StringComparison]::Ordinal)) {
+            Move-Item -LiteralPath (Join-Path $out "PhotoSelector.Cli.exe") -Destination (Join-Path $out "photo-selector.exe") -Force
+          } else {
+            Move-Item -LiteralPath (Join-Path $out "PhotoSelector.Cli") -Destination (Join-Path $out "photo-selector") -Force
+          }
           Copy-Item README.md $out
           Copy-Item LICENSE $out
 
@@ -114,19 +125,20 @@ jobs:
         run: |
           $rid = "${{ matrix.rid }}"
           $version = "${{ steps.version.outputs.version }}"
+          $package = "${{ matrix.package }}"
           $archive = "${{ matrix.archive }}"
           $out = Join-Path "artifacts" "photo-selector-$version-$rid"
           New-Item -ItemType Directory -Force -Path "dist" | Out-Null
           if ($archive -eq "zip") {
-            Compress-Archive -Path "$out/*" -DestinationPath "dist/photo-selector-$version-$rid.zip" -Force
+            Compress-Archive -Path "$out/*" -DestinationPath "dist/photo-selector-$version-$package.zip" -Force
           } else {
-            tar -czf "dist/photo-selector-$version-$rid.tar.gz" -C $out .
+            tar -czf "dist/photo-selector-$version-$package.tar.gz" -C $out .
           }
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photo-selector-${{ steps.version.outputs.version }}-${{ matrix.rid }}
+          name: photo-selector-${{ steps.version.outputs.version }}-${{ matrix.package }}
           path: dist/*
           if-no-files-found: error
 

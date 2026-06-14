@@ -62,42 +62,42 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow runs tests, publishes NativeAOT CLI packages for Windows, Linux, and macOS, then uploads them to the GitHub Release.
+The workflow runs tests, publishes NativeAOT CLI packages for Windows, Linux, and macOS, then uploads them to the GitHub Release. Windows packages contain `photo-selector.exe`; Linux and macOS packages contain `photo-selector`.
 
 ## Quick Start
 
 Configure a provider:
 
 ```powershell
-dotnet run --project src\PhotoSelector.Cli -- config set provider openrouter
-dotnet run --project src\PhotoSelector.Cli -- config set base_url https://openrouter.ai/api/v1
-dotnet run --project src\PhotoSelector.Cli -- config set model <vision-model>
+photo-selector config set provider openrouter
+photo-selector config set base_url https://openrouter.ai/api/v1
+photo-selector config set model <vision-model>
 ```
 
 Store an API key in the system credential store:
 
 ```powershell
-Get-Content key.txt | dotnet run --project src\PhotoSelector.Cli -- auth login --profile default --api-key-stdin
-dotnet run --project src\PhotoSelector.Cli -- auth status --verbose
+Get-Content key.txt | photo-selector auth login --profile default --api-key-stdin
+photo-selector auth status --verbose
 ```
 
 Run photo culling:
 
 ```powershell
-dotnet run --project src\PhotoSelector.Cli -- pick "C:\Photos\Shoot" --concurrency 2
+photo-selector pick "C:\Photos\Shoot" --concurrency 2
 ```
 
 Inspect results:
 
 ```powershell
-dotnet run --project src\PhotoSelector.Cli -- results "C:\Photos\Shoot"
-dotnet run --project src\PhotoSelector.Cli -- results "C:\Photos\Shoot" --json
+photo-selector results "C:\Photos\Shoot"
+photo-selector results "C:\Photos\Shoot" --json
 ```
 
 Export selected pairs:
 
 ```powershell
-dotnet run --project src\PhotoSelector.Cli -- export keep "C:\Photos\Shoot" "C:\Photos\Exports"
+photo-selector export keep "C:\Photos\Shoot" "C:\Photos\Exports"
 ```
 
 ## Main Commands
