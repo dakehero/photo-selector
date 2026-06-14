@@ -99,7 +99,13 @@ jobs:
             --self-contained true `
             -p:PublishAot=true `
             -p:StripSymbols=true `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
             -o $out
+          foreach ($pattern in @("*.pdb", "*.dbg", "*.dSYM")) {
+            Get-ChildItem -Path $out -Recurse -Force -Filter $pattern -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force
+          }
           Copy-Item README.md $out
           Copy-Item LICENSE $out
 
