@@ -129,6 +129,11 @@ jobs:
     needs: publish
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Resolve release tag
         id: version
         shell: bash
