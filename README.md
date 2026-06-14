@@ -1,0 +1,97 @@
+# Photo Selector
+
+Photo Selector is a local-first CLI engine for AI-assisted photo culling and critique.
+
+The current MVP focuses on the shared core and command-line workflow:
+
+- Scan photo directories and pair JPG/JPEG files with matching RAW files.
+- Rate, pick, and critique photos with OpenAI-compatible vision models.
+- Store results in a local SQLite catalog under the user's config directory.
+- Keep API keys out of config files by using system credential stores or environment variables.
+- Export selected JPG+RAW pairs without modifying the original source directory.
+- Emit JSON output for scripts and future agent/MCP integrations.
+
+The desktop GUI is intentionally not part of the current MVP. It is planned as a future replaceable shell over the same core engine.
+
+## Status
+
+Early CLI MVP. Expect prompt, model, and workflow tuning to continue.
+
+## Requirements
+
+- .NET 10 SDK
+- A vision-capable OpenAI-compatible provider, such as OpenRouter or a local compatible server
+
+## Build
+
+```powershell
+dotnet build
+dotnet test
+```
+
+NativeAOT CLI build for Windows ARM64:
+
+```powershell
+dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r win-arm64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-win-arm64-aot-latest
+```
+
+## Quick Start
+
+Configure a provider:
+
+```powershell
+dotnet run --project src\PhotoSelector.Cli -- config set provider openrouter
+dotnet run --project src\PhotoSelector.Cli -- config set base_url https://openrouter.ai/api/v1
+dotnet run --project src\PhotoSelector.Cli -- config set model <vision-model>
+```
+
+Store an API key in the system credential store:
+
+```powershell
+Get-Content key.txt | dotnet run --project src\PhotoSelector.Cli -- auth login --profile default --api-key-stdin
+dotnet run --project src\PhotoSelector.Cli -- auth status --verbose
+```
+
+Run photo culling:
+
+```powershell
+dotnet run --project src\PhotoSelector.Cli -- pick "C:\Photos\Shoot" --concurrency 2
+```
+
+Inspect results:
+
+```powershell
+dotnet run --project src\PhotoSelector.Cli -- results "C:\Photos\Shoot"
+dotnet run --project src\PhotoSelector.Cli -- results "C:\Photos\Shoot" --json
+```
+
+Export selected pairs:
+
+```powershell
+dotnet run --project src\PhotoSelector.Cli -- export keep "C:\Photos\Shoot" "C:\Photos\Exports"
+```
+
+## Main Commands
+
+- `pick <directory>`: multi-photo culling workflow.
+- `scan <directory>`: synchronous import and rating path for automation.
+- `rate <image>`: rate one photo.
+- `coach <image>`: critique one photo.
+- `arena <directory> --models <model-a,model-b>`: compare models on the same photo set.
+- `results [directory]`: summarize ratings.
+- `results [directory] --photo <photo-id|base-name> --audit --json`: inspect one decision trace.
+- `mark <directory> <photo-id|base-name>`: save manual decisions and notes.
+- `export <keep|maybe|reject> <directory> <target>`: copy selected JPG+RAW pairs.
+- `help --json`: expose machine-readable CLI help.
+
+## Secrets And Privacy
+
+- API keys are not stored in config files, SQLite, tests, or audit logs.
+- `api_key_ref` uses the platform credential store.
+- `api_key_env` is available for CLI and CI environments.
+- RAW files are not uploaded for scoring; the provider receives a generated JPG preview.
+- Audit logs store redacted request metadata and raw model responses for traceability.
+
+## License
+
+MIT
