@@ -21,7 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PhotoSelector.Core\PhotoSelector.Core.csproj" />
     <ProjectReference Include="..\..\src\PhotoSelector.Ai\PhotoSelector.Ai.csproj" />
-    <ProjectReference Include="..\..\src\PhotoSelector.App\PhotoSelector.App.csproj" />
     <ProjectReference Include="..\..\src\PhotoSelector.Cli\PhotoSelector.Cli.csproj" />
     <ProjectReference Include="..\..\src\PhotoSelector.Config\PhotoSelector.Config.csproj" />
   </ItemGroup>

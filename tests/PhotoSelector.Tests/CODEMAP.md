@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`PhotoSelector.Tests` is the regression suite for shared behavior across core workflow, config, AI provider logic, CLI orchestration, and provisional app view models.
+`PhotoSelector.Tests` is the regression suite for shared behavior across core workflow, config, AI provider logic, CLI orchestration, and shared workflow behavior.
 
 ## Main Test Areas
 
@@ -12,7 +12,6 @@
 - CLI smoke tests and rating command orchestration.
 - Catalog-first CLI scan/open/list behavior.
 - Product CLI rating, status, reset, and removed-command behavior.
-- Avalonia view-model behavior that can be tested without launching the full UI.
 
 ## Important Files
 
@@ -26,7 +25,6 @@
 - `CliRateTests.cs`: rating workflow orchestration and audit persistence.
 - `CliSmokeTests.cs`: basic CLI command coverage.
 - `SecretStoreFactoryTests.cs`: platform and memory secret-store selection.
-- `MainWindowViewModelTests.cs`: app view-model behavior.
 
 ## Boundaries
 

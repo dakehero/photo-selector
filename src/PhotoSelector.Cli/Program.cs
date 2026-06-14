@@ -265,6 +265,7 @@ public static partial class CliApp
         var directoryArgument = new Argument<string>("directory");
         var jsonOption = new Option<bool>("--json");
         var modelOption = new Option<string?>("--model");
+        var promptOption = new Option<string?>("--prompt");
         var qualityOption = new Option<string?>("--quality");
         var previewEdgeOption = new Option<int?>("--preview-edge");
         var previewJpegQualityOption = new Option<int?>("--preview-jpeg-quality");
@@ -272,6 +273,7 @@ public static partial class CliApp
         command.Arguments.Add(directoryArgument);
         command.Options.Add(jsonOption);
         command.Options.Add(modelOption);
+        command.Options.Add(promptOption);
         command.Options.Add(qualityOption);
         command.Options.Add(previewEdgeOption);
         command.Options.Add(previewJpegQualityOption);
@@ -281,13 +283,14 @@ public static partial class CliApp
             var options = BuildProductCommandOptions(
                 parseResult.GetValue(jsonOption),
                 parseResult.GetValue(modelOption),
+                parseResult.GetValue(promptOption),
                 parseResult.GetValue(qualityOption),
                 parseResult.GetValue(previewEdgeOption),
                 parseResult.GetValue(previewJpegQualityOption),
                 parseResult.GetValue(concurrencyOption),
                 PhotoPreviewOptions.Fast,
                 allowConcurrency: true,
-                error);
+                error: error);
             return options is null
                 ? 1
                 : RunPick(
@@ -331,7 +334,8 @@ public static partial class CliApp
             secretStore,
             ratingClient,
             options.Json ? null : output,
-            SelectionPrompt.Text,
+            options.PromptOverride,
+            null,
             options.Preview,
             options.ConcurrencyOverride);
         if (processing is null)
@@ -372,12 +376,14 @@ public static partial class CliApp
         var imageArgument = new Argument<string>("image");
         var jsonOption = new Option<bool>("--json");
         var modelOption = new Option<string?>("--model");
+        var promptOption = new Option<string?>("--prompt");
         var qualityOption = new Option<string?>("--quality");
         var previewEdgeOption = new Option<int?>("--preview-edge");
         var previewJpegQualityOption = new Option<int?>("--preview-jpeg-quality");
         command.Arguments.Add(imageArgument);
         command.Options.Add(jsonOption);
         command.Options.Add(modelOption);
+        command.Options.Add(promptOption);
         command.Options.Add(qualityOption);
         command.Options.Add(previewEdgeOption);
         command.Options.Add(previewJpegQualityOption);
@@ -386,13 +392,14 @@ public static partial class CliApp
             var options = BuildProductCommandOptions(
                 parseResult.GetValue(jsonOption),
                 parseResult.GetValue(modelOption),
+                parseResult.GetValue(promptOption),
                 parseResult.GetValue(qualityOption),
                 parseResult.GetValue(previewEdgeOption),
                 parseResult.GetValue(previewJpegQualityOption),
                 null,
                 PhotoPreviewOptions.High,
                 allowConcurrency: false,
-                error);
+                error: error);
             return options is null
                 ? 1
                 : RunSinglePhotoProductCommand(
@@ -433,7 +440,7 @@ public static partial class CliApp
         using var ownedClient = context.OwnedClient;
         var prompt = BuildRatingPrompt(
             context.Profile,
-            kind == ProductCommandKind.Rate ? RatingPrompt.Text : CoachingPrompt.Text);
+            options.PromptOverride);
         var result = context.Client
             .RatePhotoAsync(
                 new PhotoRatingRequest(
@@ -475,14 +482,17 @@ public static partial class CliApp
         var command = new Command("scan", "Synchronously import and rate a directory.");
         var directoryArgument = new Argument<string>("directory");
         var modelOption = new Option<string?>("--model");
+        var promptOption = new Option<string?>("--prompt");
         var jsonOption = new Option<bool>("--json");
         command.Arguments.Add(directoryArgument);
         command.Options.Add(modelOption);
+        command.Options.Add(promptOption);
         command.Options.Add(jsonOption);
         command.SetAction(parseResult =>
             RunScan(
                 parseResult.GetRequiredValue(directoryArgument),
                 parseResult.GetValue(modelOption),
+                parseResult.GetValue(promptOption),
                 parseResult.GetValue(jsonOption),
                 output,
                 error,
@@ -494,6 +504,7 @@ public static partial class CliApp
     private static int RunScan(
         string directory,
         string? modelOverride,
+        string? promptOverride,
         bool json,
         TextWriter output,
         TextWriter error,
@@ -521,7 +532,8 @@ public static partial class CliApp
             error,
             secretStore,
             ratingClient,
-            json ? null : output);
+            json ? null : output,
+            promptOverride);
         if (processing is null)
         {
             return 1;
@@ -576,14 +588,17 @@ public static partial class CliApp
             Required = true,
         };
         var limitOption = new Option<int?>("--limit");
+        var promptOption = new Option<string?>("--prompt");
         command.Arguments.Add(directoryArgument);
         command.Options.Add(modelsOption);
         command.Options.Add(limitOption);
+        command.Options.Add(promptOption);
         command.SetAction(parseResult =>
             RunArena(
                 parseResult.GetRequiredValue(directoryArgument),
                 parseResult.GetRequiredValue(modelsOption),
                 parseResult.GetValue(limitOption),
+                parseResult.GetValue(promptOption),
                 output,
                 error,
                 secretStore,
@@ -625,6 +640,7 @@ public static partial class CliApp
         string directory,
         string modelsCsv,
         int? limitOverride,
+        string? promptOverride,
         TextWriter output,
         TextWriter error,
         ISecretStore secretStore,
@@ -668,7 +684,7 @@ public static partial class CliApp
         }
 
         using var ownedClient = context.OwnedClient;
-        var prompt = BuildRatingPrompt(context.Profile);
+        var prompt = BuildRatingPrompt(context.Profile, promptOverride);
         var arenaRunId = database.CreateArenaRun(
             project.Id,
             context.Profile.Provider,
@@ -1523,6 +1539,7 @@ public static partial class CliApp
     private static ProductCommandOptions? BuildProductCommandOptions(
         bool json,
         string? modelOverride,
+        string? promptOverride,
         string? quality,
         int? previewEdge,
         int? previewJpegQuality,
@@ -1568,7 +1585,7 @@ public static partial class CliApp
             preview = preview with { JpegQuality = previewJpegQuality.Value };
         }
 
-        return new ProductCommandOptions(json, modelOverride, preview, concurrencyOverride);
+        return new ProductCommandOptions(json, modelOverride, promptOverride, preview, concurrencyOverride);
     }
 
     private static ProductCommandOptions? WriteProductOptionError(TextWriter error, string message)
@@ -1612,7 +1629,8 @@ public static partial class CliApp
         ISecretStore secretStore,
         IPhotoRatingClient? ratingClient,
         TextWriter? progressOutput,
-        string? promptOverride = null,
+        string? commandPromptOverride = null,
+        string? defaultPrompt = null,
         PhotoPreviewOptions? preview = null,
         int? concurrencyOverride = null)
     {
@@ -1634,7 +1652,7 @@ public static partial class CliApp
             context.BaseUrl,
             context.ApiKey.Secret!,
             context.Profile,
-            BuildRatingPrompt(context.Profile, promptOverride),
+            BuildRatingPrompt(context.Profile, commandPromptOverride, defaultPrompt),
             force,
             concurrencyOverride ?? context.Profile.Concurrency,
             preview);
@@ -1893,16 +1911,25 @@ public static partial class CliApp
 
         var status = new Command("status", "Show API key availability.");
         var statusProfileOption = new Option<string?>("--profile");
+        var verboseOption = new Option<bool>("--verbose");
+        var statusJsonOption = new Option<bool>("--json");
         status.Options.Add(statusProfileOption);
+        status.Options.Add(verboseOption);
+        status.Options.Add(statusJsonOption);
         status.SetAction(parseResult =>
-            RunAuthStatus(parseResult.GetValue(statusProfileOption), output, secretStore));
+            RunAuthStatus(
+                parseResult.GetValue(statusProfileOption),
+                parseResult.GetValue(verboseOption),
+                parseResult.GetValue(statusJsonOption),
+                output,
+                secretStore));
         command.Subcommands.Add(status);
 
         var logout = new Command("logout", "Remove an API key reference.");
         var logoutProfileOption = new Option<string?>("--profile");
         logout.Options.Add(logoutProfileOption);
         logout.SetAction(parseResult =>
-            RunAuthLogout(parseResult.GetValue(logoutProfileOption) ?? "default", output, secretStore));
+            RunAuthLogout(parseResult.GetValue(logoutProfileOption) ?? "default", output, error, secretStore));
         command.Subcommands.Add(logout);
 
         return command;
@@ -1919,6 +1946,13 @@ public static partial class CliApp
         if (!useStdin)
         {
             error.WriteLine("Use --api-key-stdin to read the API key from standard input.");
+            return 1;
+        }
+
+        var secretStoreStatus = secretStore.GetStatus();
+        if (!secretStoreStatus.IsAvailable)
+        {
+            error.WriteLine($"Secret store unavailable: {secretStoreStatus.Error ?? "unknown error"}");
             return 1;
         }
 
@@ -1944,24 +1978,55 @@ public static partial class CliApp
         return 0;
     }
 
-    private static int RunAuthStatus(string? profileNameOverride, TextWriter output, ISecretStore secretStore)
+    private static int RunAuthStatus(string? profileNameOverride, bool verbose, bool json, TextWriter output, ISecretStore secretStore)
     {
         var store = new ConfigStore();
         var config = store.Load();
         var profileName = profileNameOverride ?? config.ActiveProfile;
         var profile = config.GetOrCreateProfile(profileName);
         var resolution = ApiKeyResolver.Resolve(profile, secretStore);
+        var secretStoreStatus = secretStore.GetStatus();
+
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new AuthStatusJson(
+                    profileName,
+                    secretStore.ProviderName,
+                    secretStoreStatus.IsAvailable,
+                    secretStoreStatus.Error,
+                    profile.ApiKeyRef,
+                    profile.ApiKeyEnv,
+                    resolution.IsAvailable,
+                    resolution.Source,
+                    resolution.Error),
+                CliJsonContext.Default.AuthStatusJson));
+            return 0;
+        }
 
         output.WriteLine($"profile: {profileName}");
         output.WriteLine($"secret_store: {secretStore.ProviderName}");
+        if (verbose)
+        {
+            output.WriteLine($"secret_store_available: {secretStoreStatus.IsAvailable.ToString().ToLowerInvariant()}");
+            output.WriteLine($"secret_store_error: {secretStoreStatus.Error ?? "(none)"}");
+        }
+
         output.WriteLine($"api_key_ref: {profile.ApiKeyRef ?? "(not set)"}");
         output.WriteLine($"api_key_env: {profile.ApiKeyEnv ?? "(not set)"}");
         output.WriteLine(resolution.IsAvailable ? $"key: available via {resolution.Source}" : $"key: unavailable ({resolution.Error})");
         return 0;
     }
 
-    private static int RunAuthLogout(string profileName, TextWriter output, ISecretStore secretStore)
+    private static int RunAuthLogout(string profileName, TextWriter output, TextWriter error, ISecretStore secretStore)
     {
+        var secretStoreStatus = secretStore.GetStatus();
+        if (!secretStoreStatus.IsAvailable)
+        {
+            error.WriteLine($"Secret store unavailable: {secretStoreStatus.Error ?? "unknown error"}");
+            return 1;
+        }
+
         var keyRef = $"photo-selector/{profileName}";
         secretStore.Delete(keyRef);
 
@@ -2097,13 +2162,14 @@ public static partial class CliApp
         new(
             "pick",
             "photo-selector pick <directory>",
-            "Select best photos from a directory using the selection prompt.",
+            "Select best photos from a directory using the default or configured prompt.",
             [new HelpArgumentJson("directory", true, "path", "directory", "Directory containing JPEG and optional RAW pairs.")],
             [
                 new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
                 new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
                 new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
                 new HelpOptionJson("--concurrency", "integer", false, [], "Override concurrent AI requests for this run."),
+                new HelpOptionJson("--prompt", "string", false, [], "Override the configured or built-in prompt for this run."),
                 ModelOption,
                 JsonOption,
             ],
@@ -2112,12 +2178,13 @@ public static partial class CliApp
         new(
             "rate",
             "photo-selector rate <image>",
-            "Rate one photo with the detailed critique prompt.",
+            "Rate one photo with the default or configured prompt.",
             [new HelpArgumentJson("image", true, "path", "file", "JPEG or readable image file.")],
             [
                 new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
                 new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
                 new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
+                new HelpOptionJson("--prompt", "string", false, [], "Override the configured or built-in prompt for this run."),
                 ModelOption,
                 JsonOption,
             ],
@@ -2126,12 +2193,13 @@ public static partial class CliApp
         new(
             "coach",
             "photo-selector coach <image>",
-            "Give practical coaching advice for one photo.",
+            "Run one-photo coaching output with the default or configured prompt.",
             [new HelpArgumentJson("image", true, "path", "file", "JPEG or readable image file.")],
             [
                 new HelpOptionJson("--quality", "string", false, ["fast", "standard", "high", "detail"], "Choose preview size and JPEG compression preset."),
                 new HelpOptionJson("--preview-edge", "integer", false, [], "Override the longest preview edge in pixels."),
                 new HelpOptionJson("--preview-jpeg-quality", "integer", false, [], "Override preview JPEG quality from 1 to 100."),
+                new HelpOptionJson("--prompt", "string", false, [], "Override the configured or built-in prompt for this run."),
                 ModelOption,
                 JsonOption,
             ],
@@ -2147,6 +2215,7 @@ public static partial class CliApp
             [
                 new HelpOptionJson("--models", "string", true, [], "Comma-separated model names."),
                 new HelpOptionJson("--limit", "integer", false, [], "Limit the number of photos evaluated."),
+                new HelpOptionJson("--prompt", "string", false, [], "Override the configured or built-in prompt for this run."),
             ],
             new HelpOutputJson(true, false, "Arena run summary."),
             ["photo-selector arena \"C:\\Photos\\Shoot\" --models model-a,model-b --limit 5"]),
@@ -2171,7 +2240,11 @@ public static partial class CliApp
             "photo-selector scan <directory>",
             "Synchronously index and rate a directory with the default rating prompt.",
             [new HelpArgumentJson("directory", true, "path", "directory", "Directory containing JPEG and optional RAW pairs.")],
-            [ModelOption, JsonOption],
+            [
+                new HelpOptionJson("--prompt", "string", false, [], "Override the configured or built-in prompt for this run."),
+                ModelOption,
+                JsonOption,
+            ],
             new HelpOutputJson(true, true, "Directory processing summary and rating results."),
             ["photo-selector scan \"C:\\Photos\\Shoot\" --json"]),
         new(
@@ -2270,12 +2343,16 @@ public static partial class CliApp
             ["Get-Content key.txt | photo-selector auth login --profile default --api-key-stdin"]),
         new(
             "auth status",
-            "photo-selector auth status --profile default",
-            "Show configured secret reference availability.",
+            "photo-selector auth status [--profile <name>] [--verbose] [--json]",
+            "Show configured secret reference availability and optional secret-store diagnostics.",
             [],
-            [new HelpOptionJson("--profile", "string", true, [], "Profile name.")],
-            new HelpOutputJson(true, false, "Auth status."),
-            ["photo-selector auth status --profile default"]),
+            [
+                new HelpOptionJson("--profile", "string", false, [], "Profile name."),
+                new HelpOptionJson("--verbose", "boolean", false, [], "Include secret-store availability diagnostics."),
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Auth status and secret-store diagnostics."),
+            ["photo-selector auth status --profile default", "photo-selector auth status --verbose", "photo-selector auth status --json"]),
         new(
             "auth logout",
             "photo-selector auth logout --profile default",
@@ -2378,6 +2455,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
     [JsonSerializable(typeof(ArenaShowJson))]
+    [JsonSerializable(typeof(AuthStatusJson))]
     [JsonSerializable(typeof(HelpCatalogJson))]
     [JsonSerializable(typeof(HelpCommandJson))]
     [JsonSerializable(typeof(RatingCriterionJson[]))]
@@ -2467,6 +2545,17 @@ public static partial class CliApp
         JobSummaryJson Jobs,
         int Rated);
 
+    private sealed record AuthStatusJson(
+        string Profile,
+        string SecretStore,
+        bool SecretStoreAvailable,
+        string? SecretStoreError,
+        string? ApiKeyRef,
+        string? ApiKeyEnv,
+        bool KeyAvailable,
+        string KeySource,
+        string? KeyError);
+
     private sealed record ProcessingJson(
         int Rated,
         int Skipped,
@@ -2502,6 +2591,7 @@ public static partial class CliApp
     private sealed record ProductCommandOptions(
         bool Json,
         string? ModelOverride,
+        string? PromptOverride,
         PhotoPreviewOptions Preview,
         int? ConcurrencyOverride);
 
@@ -2643,11 +2733,16 @@ public static partial class CliApp
 
     private sealed record RatingCriterionJson(string Name, double Score, string Comment);
 
-    private static string BuildRatingPrompt(AiProfile profile, string? defaultPrompt = null)
+    private static string BuildRatingPrompt(
+        AiProfile profile,
+        string? commandPromptOverride = null,
+        string? defaultPrompt = null)
     {
-        var prompt = string.IsNullOrWhiteSpace(profile.Prompt)
-            ? defaultPrompt ?? DefaultPhotoRatingPrompt.Text
-            : profile.Prompt;
+        var prompt = !string.IsNullOrWhiteSpace(commandPromptOverride)
+            ? commandPromptOverride
+            : string.IsNullOrWhiteSpace(profile.Prompt)
+                ? defaultPrompt ?? DefaultPhotoRatingPrompt.Text
+                : profile.Prompt;
 
         return $"""
             {prompt}

@@ -4,6 +4,11 @@ public sealed class UnsupportedSecretStore : ISecretStore
 {
     public string ProviderName => "unsupported";
 
+    public SecretStoreStatus GetStatus()
+    {
+        return new SecretStoreStatus(false, "System secret storage is not supported on this platform.");
+    }
+
     public void Set(string keyRef, string secret)
     {
         throw new NotSupportedException("System secret storage is not supported on this platform.");

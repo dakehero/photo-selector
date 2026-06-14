@@ -163,6 +163,26 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Help_auth_status_json_includes_verbose_secret_store_diagnostics_option()
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        var exitCode = CliApp.Run(["help", "auth", "status", "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("auth status", document.RootElement.GetProperty("name").GetString());
+        Assert.Contains(
+            document.RootElement.GetProperty("options").EnumerateArray(),
+            option => option.GetProperty("name").GetString() == "--verbose");
+        Assert.Contains(
+            document.RootElement.GetProperty("options").EnumerateArray(),
+            option => option.GetProperty("name").GetString() == "--json");
+    }
+
+    [Fact]
     public void Help_unknown_command_returns_usage_error()
     {
         var output = new StringWriter();

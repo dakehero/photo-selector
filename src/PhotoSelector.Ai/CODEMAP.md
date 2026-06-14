@@ -14,7 +14,7 @@
 - `Ratings/PhotoRatingRequest.cs`: normalized request passed to rating clients.
 - `Ratings/AiRating.cs`: parsed model rating, criteria, and audit metadata.
 - `Ratings/AiRatingParser.cs`: extracts strict rating JSON from model text.
-- `Ratings/DefaultPhotoRatingPrompt.cs`: default photography-review prompt.
+- `Ratings/BuiltInRatingPrompts.cs`: built-in default rating prompt.
 - `Ratings/RatingRequestPayload.cs`: OpenAI-compatible JSON payload and redacted audit payload builder.
 - `Ratings/OpenAiSdkRatingClient.cs`: official OpenAI SDK implementation.
 - `Ratings/OpenAiCompatibleRatingClient.cs`: HTTP client for OpenRouter and compatible backends.
@@ -30,4 +30,3 @@ This project may depend on provider SDKs and HTTP abstractions. It should not de
 - Preserve raw model output and raw provider responses when available, but never persist API keys or base64 image data.
 - JSON property names should stay stable English even when user-visible comments follow `output_language`.
 - Add parser and provider tests before changing rating contracts, prompt shape, or request payloads.
-

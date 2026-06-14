@@ -6,6 +6,11 @@ public sealed class MemorySecretStore : ISecretStore
 
     public string ProviderName => "memory";
 
+    public SecretStoreStatus GetStatus()
+    {
+        return new SecretStoreStatus(true, null);
+    }
+
     public void Set(string keyRef, string secret)
     {
         secrets[keyRef] = secret;

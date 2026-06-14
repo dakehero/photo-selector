@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the first working native-feeling photo selector MVP with JPG+RAW pairing, a shared SQLite catalog, queued AI rating jobs, catalog-first CLI commands, non-destructive export, and an Avalonia workbench shell.
+**Goal:** Build the first working photo selector MVP with JPG+RAW pairing, a shared SQLite catalog, queued AI rating jobs, catalog-first CLI commands, non-destructive export, and future GUI hooks. The desktop GUI itself is待实现 and is not part of the current MVP.
 
-**Architecture:** Use a .NET solution with focused projects: core storage/domain logic, AI integration, shared agent/workflow orchestration, CLI, Avalonia UI, shared config/credentials, and tests. Core behavior is implemented test-first and reused by CLI and GUI.
+**Architecture:** Use a .NET solution with focused projects: core storage/domain logic, AI integration, shared agent/workflow orchestration, CLI, shared config/credentials, and tests. Core behavior is implemented test-first and must be reusable by any future GUI.
 
-**Tech Stack:** .NET 10 currently, Avalonia, Microsoft.Data.Sqlite, xUnit, OpenAI .NET SDK for OpenAI where practical, and System.CommandLine for the NativeAOT-friendly CLI surface.
+**Tech Stack:** .NET 10 currently, Microsoft.Data.Sqlite, xUnit, OpenAI .NET SDK for OpenAI where practical, and System.CommandLine for the NativeAOT-friendly CLI surface. GUI framework selection is待实现.
 
 **2026-06-09 revision:** This plan has been corrected to match the current product design. Do not implement old database-path CLI commands. User-facing CLI commands must be catalog-first and should not expose SQLite paths.
 
@@ -18,9 +18,9 @@
 - `src/PhotoSelector.Core/`: domain models, scanner, pairing, SQLite repository, export service.
 - `src/PhotoSelector.Ai/`: provider clients, scoring models, prompt contract, parser, and audit payload helpers.
 - `src/PhotoSelector.Config/`: shared config paths, provider profiles, and credential resolution.
-- `src/PhotoSelector.Agent/`: import workflow, queued rating jobs, and worker orchestration shared by CLI/GUI/future agents.
+- `src/PhotoSelector.Agent/`: import workflow, queued rating jobs, and worker orchestration shared by CLI/future GUI/future agents.
 - `src/PhotoSelector.Cli/`: catalog-first commands: `pick`, `rate`, `coach`, `arena`, `scan`, `status`, `reset ratings`, `results`, `export`, `projects`, `open`, and `photos`.
-- `src/PhotoSelector.App/`: Avalonia app matching the approved workbench prototype.
+- Future GUI project:待实现. Do not add it back until the UI framework and release target are selected.
 - `tests/PhotoSelector.Tests/`: xUnit tests for core and CLI-critical behavior.
 - `prototypes/photo-selector-workbench.html`: already created visual reference for the desktop workbench.
 
@@ -35,7 +35,6 @@
 - Create: `src/PhotoSelector.Config/PhotoSelector.Config.csproj`
 - Create: `src/PhotoSelector.Agent/PhotoSelector.Agent.csproj`
 - Create: `src/PhotoSelector.Cli/PhotoSelector.Cli.csproj`
-- Create: `src/PhotoSelector.App/PhotoSelector.App.csproj`
 - Create: `tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj`
 
 - [ ] **Step 1: Create the .NET solution and projects**
@@ -49,18 +48,16 @@ dotnet new classlib -n PhotoSelector.Ai -o src/PhotoSelector.Ai
 dotnet new classlib -n PhotoSelector.Config -o src/PhotoSelector.Config
 dotnet new classlib -n PhotoSelector.Agent -o src/PhotoSelector.Agent
 dotnet new console -n PhotoSelector.Cli -o src/PhotoSelector.Cli
-dotnet new avalonia.app -n PhotoSelector.App -o src/PhotoSelector.App
 dotnet new xunit -n PhotoSelector.Tests -o tests/PhotoSelector.Tests
 dotnet sln add src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet sln add src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
 dotnet sln add src/PhotoSelector.Config/PhotoSelector.Config.csproj
 dotnet sln add src/PhotoSelector.Agent/PhotoSelector.Agent.csproj
 dotnet sln add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj
-dotnet sln add src/PhotoSelector.App/PhotoSelector.App.csproj
 dotnet sln add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj
 ```
 
-Expected: solution contains Core, AI, Config, Agent, CLI, App, and Tests projects.
+Expected: solution contains Core, AI, Config, Agent, CLI, and Tests projects. GUI is待实现.
 
 - [ ] **Step 2: Add references and packages**
 
@@ -75,9 +72,6 @@ dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSel
 dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
 dotnet add src/PhotoSelector.Cli/PhotoSelector.Cli.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
-dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
-dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
-dotnet add src/PhotoSelector.App/PhotoSelector.App.csproj reference src/PhotoSelector.Config/PhotoSelector.Config.csproj
 dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Core/PhotoSelector.Core.csproj
 dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Ai/PhotoSelector.Ai.csproj
 dotnet add tests/PhotoSelector.Tests/PhotoSelector.Tests.csproj reference src/PhotoSelector.Agent/PhotoSelector.Agent.csproj
@@ -548,84 +542,25 @@ git commit -m "feat: add photo selector cli"
 
 ---
 
-### Task 7: Avalonia Workbench Shell
+### Post-MVP Task: Desktop GUI Shell
 
-**Files:**
-- Modify: `src/PhotoSelector.App/MainWindow.axaml`
-- Modify: `src/PhotoSelector.App/MainWindow.axaml.cs`
-- Create: `src/PhotoSelector.App/ViewModels/MainWindowViewModel.cs`
+Status: 待实现.
 
-- [ ] **Step 1: Create shell matching prototype**
+The current MVP intentionally ships without a desktop GUI project. When UI work resumes, create a new presentation project only after choosing the target shell, such as WinUI, MAUI, SwiftUI, Tauri, or Avalonia.
 
-Build the first Avalonia screen with:
+Future GUI requirements:
 
-- top toolbar
-- left project/filter panel
-- center thumbnail grid placeholder
-- right details panel
-- keep/maybe/reject and star controls
-
-Use the prototype file as visual reference: `prototypes/photo-selector-workbench.html`.
-
-- [ ] **Step 2: Wire sample state**
-
-Create sample in-memory rows so the app opens with a visible workbench before real folder picking is connected.
-
-- [ ] **Step 3: Run the app**
-
-Run:
-
-```powershell
-dotnet run --project src/PhotoSelector.App/PhotoSelector.App.csproj
-```
-
-Expected: Avalonia window opens and resembles the approved prototype.
-
-- [ ] **Step 4: Commit**
-
-```powershell
-git add src/PhotoSelector.App
-git commit -m "feat: add avalonia workbench shell"
-```
-
----
-
-### Task 8: Wire GUI To Core Scan Flow
-
-**Files:**
-- Modify: `src/PhotoSelector.App/ViewModels/MainWindowViewModel.cs`
-- Modify: `src/PhotoSelector.App/MainWindow.axaml.cs`
-
-- [ ] **Step 1: Add open-directory and scan action**
-
-Use Avalonia storage picker to choose a directory, scan it with `PhotoScanner.ScanDirectory`, and populate the grid rows.
-
-- [ ] **Step 2: Persist scanned project**
-
-Create or update the shared catalog at `ConfigPaths.GetDatabasePath()`. Do not create the default SQLite database in the selected photo directory. GUI scan/import behavior should call shared workflow code instead of duplicating CLI logic.
-
-- [ ] **Step 3: Verify manually**
-
-Run:
-
-```powershell
-dotnet run --project src/PhotoSelector.App/PhotoSelector.App.csproj
-```
-
-Expected: selecting a directory with sample JPG/RAW files populates the grid and pair counts.
-
-- [ ] **Step 4: Commit**
-
-```powershell
-git add src/PhotoSelector.App
-git commit -m "feat: wire app scan workflow"
-```
+- Reuse `PhotoSelector.Core`, `PhotoSelector.Ai`, `PhotoSelector.Config`, and `PhotoSelector.Agent`.
+- Keep business logic out of views and view models.
+- Use the same shared catalog and credential configuration as the CLI.
+- Expose product actions such as `pick`, `scan`, `status`, `results`, `mark`, `export`, and `reset ratings`.
+- Add GUI tests after the framework and view-model boundary are selected.
 
 ---
 
 ## Self-Review Checklist
 
-- Spec coverage: scanning, JPG+RAW pairing, shared SQLite catalog, rating jobs, Agent workflows, CLI, Avalonia workbench, AI providers, and AI JSON parsing are covered.
+- Spec coverage: scanning, JPG+RAW pairing, shared SQLite catalog, rating jobs, Agent workflows, CLI, future GUI boundary, AI providers, and AI JSON parsing are covered.
 - Known gaps for follow-up work should be tracked in Superpowers specs/plans under `docs/superpowers/`, not in a root `TODO.md`.
 - Placeholder scan: no `TBD` or unspecified implementation placeholders are intended.
 - Type consistency: `PhotoPair`, `PhotoItem`, `ProjectDatabase`, `RatingJob`, `ImportWorkflow`, `RatingWorker`, `ExportService`, and `AiRatingParser` names are used consistently across tasks.

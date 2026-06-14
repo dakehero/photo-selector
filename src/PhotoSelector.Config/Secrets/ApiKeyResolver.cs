@@ -6,12 +6,20 @@ public static class ApiKeyResolver
 {
     public static ApiKeyResolution Resolve(AiProfile profile, ISecretStore secretStore)
     {
+        string? apiKeyRefError = null;
         if (!string.IsNullOrWhiteSpace(profile.ApiKeyRef))
         {
-            var secret = secretStore.Get(profile.ApiKeyRef);
-            if (!string.IsNullOrEmpty(secret))
+            try
             {
-                return new ApiKeyResolution(true, "api_key_ref", null, secret);
+                var secret = secretStore.Get(profile.ApiKeyRef);
+                if (!string.IsNullOrEmpty(secret))
+                {
+                    return new ApiKeyResolution(true, "api_key_ref", null, secret);
+                }
+            }
+            catch (Exception ex)
+            {
+                apiKeyRefError = $"Secret {profile.ApiKeyRef} is not available: {ex.Message}";
             }
         }
 
@@ -28,7 +36,7 @@ public static class ApiKeyResolver
 
         if (!string.IsNullOrWhiteSpace(profile.ApiKeyRef))
         {
-            return new ApiKeyResolution(false, "api_key_ref", $"Secret {profile.ApiKeyRef} is not available.");
+            return new ApiKeyResolution(false, "api_key_ref", apiKeyRefError ?? $"Secret {profile.ApiKeyRef} is not available.");
         }
 
         return new ApiKeyResolution(false, "none", "No api_key_ref or api_key_env is configured.");

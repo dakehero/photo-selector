@@ -25,7 +25,6 @@ This project depends on:
 ## Boundaries
 
 - Keep user-facing command parsing out of this project.
-- Keep Avalonia/UI state out of this project.
+- Keep UI state out of this project.
 - Keep provider-specific HTTP details in `PhotoSelector.Ai`.
 - Keep database schema and durable job tables in `PhotoSelector.Core`.
-

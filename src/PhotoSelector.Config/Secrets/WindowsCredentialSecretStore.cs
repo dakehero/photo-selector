@@ -10,6 +10,13 @@ public sealed class WindowsCredentialSecretStore : ISecretStore
 
     public string ProviderName => "windows-credential-manager";
 
+    public SecretStoreStatus GetStatus()
+    {
+        return OperatingSystem.IsWindows()
+            ? new SecretStoreStatus(true, null)
+            : new SecretStoreStatus(false, "Windows Credential Manager is only available on Windows.");
+    }
+
     public void Set(string keyRef, string secret)
     {
         var secretBytes = Encoding.Unicode.GetBytes(secret);

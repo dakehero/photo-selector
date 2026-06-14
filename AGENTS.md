@@ -2,16 +2,16 @@
 
 ## Project Direction
 
-Photo Selector is evolving into a photography coaching agent app. The CLI, GUI, and future agent surfaces must share the same config, auth, provider clients, database, and audit logs.
+Photo Selector is evolving into a photography coaching agent app. The CLI, future GUI, and future agent surfaces must share the same config, auth, provider clients, database, and audit logs.
 
-The C# codebase is the local engine. The UI shell is replaceable: Avalonia may remain useful, but future Tauri, WinUI, SwiftUI, MAUI, CLI, or MCP surfaces must reuse the same core projects instead of duplicating business logic.
+The C# codebase is the local engine. The first MVP is CLI/core focused. A GUI is still intended but not implemented in this repository right now; future Tauri, WinUI, SwiftUI, MAUI, Avalonia, CLI, or MCP surfaces must reuse the same core projects instead of duplicating business logic.
 
 ## Code Map
 
 - `src/PhotoSelector.Core`: domain model and local photo workflow.
   - `Files`: file classification such as JPG/RAW extension handling.
   - `Scanning`: directory scanning and JPG+RAW pair detection.
-  - `Projects`: data records used by storage, CLI, GUI, and future agent tools.
+  - `Projects`: data records used by storage, CLI, future GUI, and future agent tools.
   - `Storage`: SQLite persistence and migrations.
   - `Exporting`: file export/copy behavior.
 - `src/PhotoSelector.Ai`: AI rating and photography critique provider layer.
@@ -22,12 +22,12 @@ The C# codebase is the local engine. The UI shell is replaceable: Avalonia may r
   - `Workflows`: internal directory indexing and future app/background workflow composition.
   - `Workers`: queued rating job processing and future worker loops.
 - `src/PhotoSelector.Cli`: command surface for humans, scripts, and future agent/MCP calls.
-- `src/PhotoSelector.App`: current Avalonia shell. Treat as replaceable presentation, not the source of product logic.
-- `tests/PhotoSelector.Tests`: regression tests across core, config, AI, CLI, and app view models.
+- Future GUI: not implemented for the current MVP. Add a new presentation project only when the UI direction is selected.
+- `tests/PhotoSelector.Tests`: regression tests across core, config, AI, CLI, and shared workflow behavior.
 
 ## Code Structure Rules
 
-- Keep business logic out of UI projects. Put scanning, rating, storage, export, and provider behavior in `Core`, `Ai`, or `Config`.
+- Keep business logic out of future UI projects. Put scanning, rating, storage, export, and provider behavior in `Core`, `Ai`, `Config`, or `Agent`.
 - Keep CLI command handlers thin. If command logic grows beyond argument parsing and orchestration, extract it into core/application services.
 - Put shared indexing/rating/status orchestration in `PhotoSelector.Agent`, not in CLI or UI code.
 - Prefer the catalog-first workflow: import directories into the shared catalog first, then open, list, rate, and export by project identity.
@@ -35,7 +35,7 @@ The C# codebase is the local engine. The UI shell is replaceable: Avalonia may r
 - Do not let `ProjectDatabase` become a broad application service. It owns SQLite persistence only; workflow logic belongs outside it.
 - Do not add new platform-specific credential code to `SecretStoreFactory`; create a dedicated provider file.
 - Do not store raw image data, API keys, or unredacted requests in persistent logs.
-- `PhotoSelector.App` may use mock/demo data while the UI is provisional, but production workflows must come from shared services.
+- GUI work is currently待实现. When a GUI returns, it may use mock/demo data while provisional, but production workflows must come from shared services.
 
 ## AI Provider Rules
 
@@ -88,9 +88,9 @@ Default workflows use the shared SQLite catalog at `ConfigPaths.GetDatabasePath(
 
 Worker implementation detail:
 
-- CLI, GUI, and future MCP surfaces should expose product actions such as `pick`, `scan`, `status`, `results`, `export`, and `reset ratings`, not worker-management commands.
+- CLI, future GUI, and future MCP surfaces should expose product actions such as `pick`, `scan`, `status`, `results`, `export`, and `reset ratings`, not worker-management commands.
 - Do not expose top-level `import`, `process`, `flush`, or `worker` commands. Directory indexing and pending-job processing are internal workflow details, and future GUI app mode may run them in the background.
-- GUI startup may automatically run background processing while the app is open.
+- Future GUI startup may automatically run background processing while the app is open.
 - Shared job/worker orchestration should live above `Core`, in `PhotoSelector.Agent` or a future workflow project that depends on `Core`, `Ai`, and `Config`.
 - `Core` may own durable job tables and storage primitives, but it should not depend on provider clients, config resolution, or worker orchestration.
 

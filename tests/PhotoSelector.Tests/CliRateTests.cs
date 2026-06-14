@@ -740,7 +740,7 @@ public sealed class CliRateTests
     }
 
     [Fact]
-    public void Pick_rates_directory_with_selection_prompt_preview_quality_and_concurrency_override()
+    public void Pick_rates_directory_with_default_prompt_preview_quality_and_concurrency_override()
     {
         using var tempDirectory = new TempDirectory();
         using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
@@ -776,7 +776,7 @@ public sealed class CliRateTests
         Assert.Equal(2, client.MaxInFlight);
         Assert.All(client.Requests, request =>
         {
-            Assert.Contains("fast photo culling", request.Prompt);
+            Assert.Contains(DefaultPhotoRatingPrompt.Text, request.Prompt);
             Assert.NotNull(request.Preview);
             Assert.Equal(1600, request.Preview!.MaxEdge);
             Assert.Equal(77, request.Preview.JpegQuality);
@@ -809,7 +809,7 @@ public sealed class CliRateTests
         Assert.Equal(0, CliApp.Run(["rate", jpegPath], rateOutput, rateError, TextReader.Null, secretStore, client));
         Assert.Equal(string.Empty, rateError.ToString());
         var rateRequest = Assert.Single(client.Requests);
-        Assert.Contains("detailed photographic critique", rateRequest.Prompt);
+        Assert.Contains(DefaultPhotoRatingPrompt.Text, rateRequest.Prompt);
         Assert.NotNull(rateRequest.Preview);
         Assert.Equal(2048, rateRequest.Preview!.MaxEdge);
         Assert.Equal(90, rateRequest.Preview.JpegQuality);
@@ -821,7 +821,7 @@ public sealed class CliRateTests
         Assert.Equal(0, CliApp.Run(["coach", jpegPath, "--quality", "detail"], coachOutput, coachError, TextReader.Null, secretStore, client));
         Assert.Equal(string.Empty, coachError.ToString());
         var coachRequest = Assert.Single(client.Requests);
-        Assert.Contains("photography coach", coachRequest.Prompt);
+        Assert.Contains(DefaultPhotoRatingPrompt.Text, coachRequest.Prompt);
         Assert.NotNull(coachRequest.Preview);
         Assert.Equal(3072, coachRequest.Preview!.MaxEdge);
         Assert.Equal(92, coachRequest.Preview.JpegQuality);
@@ -829,6 +829,46 @@ public sealed class CliRateTests
         var directoryError = new StringWriter();
         Assert.Equal(1, CliApp.Run(["rate", sourceDirectory], TextWriter.Null, directoryError, TextReader.Null, secretStore, client));
         Assert.Contains("requires one image file", directoryError.ToString());
+    }
+
+    [Fact]
+    public void Rate_uses_command_line_prompt_before_configured_prompt()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        Assert.Equal(0, CliApp.Run(["config", "set", "prompt", "configured prompt"], TextWriter.Null, TextWriter.Null));
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(
+            new AiRating(
+                "street",
+                7.1,
+                "maybe",
+                [new AiRatingCriterion("impact", 7.0, "Useful.")],
+                "Useful candidate."));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        Assert.Equal(
+            0,
+            CliApp.Run(
+                ["rate", jpegPath, "--prompt", "cli prompt"],
+                output,
+                error,
+                TextReader.Null,
+                secretStore,
+                client));
+
+        Assert.Equal(string.Empty, error.ToString());
+        var request = Assert.Single(client.Requests);
+        Assert.Contains("cli prompt", request.Prompt);
+        Assert.DoesNotContain("configured prompt", request.Prompt);
+        Assert.DoesNotContain(DefaultPhotoRatingPrompt.Text, request.Prompt);
     }
 
     [Fact]

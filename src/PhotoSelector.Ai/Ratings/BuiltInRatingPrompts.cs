@@ -35,20 +35,14 @@ public static class DefaultPhotoRatingPrompt
         maybe = score 5.0 to 7.9
         reject = score 1.0 to 4.9
 
-        Return JSON only with this exact shape and no markdown:
-        {
-          "photo_type": "landscape",
-          "score": 7.3,
-          "category": "maybe",
-          "criteria": [
-            {"name": "impact", "score": 6.4, "comment": "Short expert comment."},
-            {"name": "composition", "score": 7.2, "comment": "Short expert comment."},
-            {"name": "lighting", "score": 6.8, "comment": "Short expert comment."},
-            {"name": "technical_quality", "score": 8.1, "comment": "Short expert comment."},
-            {"name": "subject_story", "score": 6.5, "comment": "Short expert comment."},
-            {"name": "creativity_originality", "score": 5.7, "comment": "Short expert comment."}
-          ],
-          "reason": "One-sentence final expert culling verdict under 180 characters."
-        }
+        Return JSON only with no markdown. Use this object contract:
+        - photo_type: a short genre string such as landscape, portrait, street, travel_documentary, wildlife, event, architecture, macro, product_food, abstract, or unknown
+        - score: the overall numeric score, written with exactly one decimal place
+        - category: keep, maybe, or reject, matching the score range above
+        - criteria: an array of objects with name, score, and comment fields
+        - criteria names: impact, composition, lighting, technical_quality, subject_story, creativity_originality
+        - each criterion score: numeric, written with exactly one decimal place
+        - each criterion comment: short expert comment
+        - reason: one-sentence final expert culling verdict under 180 characters
         """;
 }

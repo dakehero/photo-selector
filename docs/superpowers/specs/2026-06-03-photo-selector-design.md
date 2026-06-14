@@ -6,14 +6,14 @@ Build a cross-platform, native-feeling desktop app for quickly selecting photos 
 
 ## Product Scope
 
-The first version is a local catalog-first application with a CLI that must be genuinely usable before the GUI is polished. The GUI remains important, but it is a replaceable shell over the shared engine. It is not a web app and should avoid web-shell frameworks for the primary UI unless the product direction is explicitly changed.
+The first version is a local catalog-first CLI/core application. The GUI remains important but is待实现 and should be treated as a replaceable shell over the shared engine. It is not a web app by default and should avoid web-shell frameworks for the primary UI unless the product direction is explicitly changed.
 
 The minimum useful workflow is:
 
 1. Import or scan a photo directory into the shared catalog.
 2. Pair JPG files with matching RAW files.
 3. Queue or synchronously run AI scoring and classification.
-4. Query status and results from CLI, GUI, or future agent surfaces.
+4. Query status and results from CLI or future GUI/agent surfaces.
 5. Let the user confirm keep, maybe, reject, and star ratings.
 6. Export selected JPG+RAW pairs to a target directory by copying files.
 
@@ -21,15 +21,15 @@ The app must not move, delete, rename, or overwrite files in the original source
 
 ## Technology Choice
 
-Use an Avalonia and .NET solution.
+Use a .NET local engine with a NativeAOT-friendly CLI. The desktop GUI is待实现 and the UI framework remains undecided.
 
 Projects:
 
 - `PhotoSelector.Core`: scanning, file type detection, JPG+RAW pairing, database models, rating job records, export logic, and storage primitives.
 - `PhotoSelector.Ai`: provider clients, scoring prompt handling, structured AI result parsing, raw audit capture, and provider factories.
 - `PhotoSelector.Config`: shared config paths, provider profiles, and secret-store integration.
-- `PhotoSelector.Agent`: import workflows, queued rating jobs, and worker orchestration shared by CLI, GUI, and future MCP/agent surfaces.
-- `PhotoSelector.App`: Avalonia desktop GUI.
+- `PhotoSelector.Agent`: import workflows, queued rating jobs, and worker orchestration shared by CLI, future GUI, and future MCP/agent surfaces.
+- Future GUI project:待实现. It must reuse Core/Ai/Config/Agent instead of owning product logic.
 - `PhotoSelector.Cli`: command-line interface that reuses the Agent/Core/AI/Config layers.
 - `PhotoSelector.Tests`: focused tests for core behavior and CLI-critical flows.
 
@@ -74,9 +74,9 @@ Scores are decimal values from `1.0` to `10.0` with exactly one decimal place. E
 
 User decisions are `unreviewed`, `keep`, `maybe`, and `reject`.
 
-## Desktop UI
+## Future Desktop UI
 
-The first screen is the working interface, not a landing page.
+The desktop UI is待实现 and is outside the current CLI/core MVP. When it returns, the first screen should be the working interface, not a landing page.
 
 Layout:
 
@@ -230,10 +230,10 @@ CLI tests:
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs without requiring SQLite paths.
 - `projects/open/photos --json` emit parseable JSON without requiring SQLite paths.
 
-GUI tests:
+Future GUI tests:
 
 - View-model tests for filtering, selection, rating display, and user decisions.
-- Manual verification for the first Avalonia shell and image preview behavior.
+- Manual verification for the first shell and image preview behavior once a GUI framework is selected.
 
 ## Out Of Scope For First Version
 
@@ -247,4 +247,4 @@ GUI tests:
 
 ## Implementation Defaults
 
-Use the standard Avalonia MVVM application template for `PhotoSelector.App`, a console template for `PhotoSelector.Cli`, and .NET class libraries for shared projects. Packaging can begin with framework-dependent builds during development and move to self-contained releases after the core workflow is working.
+Use a console template for `PhotoSelector.Cli` and .NET class libraries for shared projects. The GUI project is待实现; choose its framework later and keep it as a replaceable presentation layer. Packaging can begin with CLI self-contained or NativeAOT builds after the core workflow is working.

@@ -28,4 +28,26 @@ public sealed class SecretStoreFactoryTests
         Assert.IsType<MemorySecretStore>(store);
         Assert.Equal("memory", store.ProviderName);
     }
+
+    [Fact]
+    public void Memory_store_reports_available_status()
+    {
+        var store = new MemorySecretStore();
+
+        var status = store.GetStatus();
+
+        Assert.True(status.IsAvailable);
+        Assert.Null(status.Error);
+    }
+
+    [Fact]
+    public void Unsupported_store_reports_unavailable_status()
+    {
+        var store = new UnsupportedSecretStore();
+
+        var status = store.GetStatus();
+
+        Assert.False(status.IsAvailable);
+        Assert.Equal("System secret storage is not supported on this platform.", status.Error);
+    }
 }
