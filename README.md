@@ -1,54 +1,103 @@
 # Photo Selector
 
-Photo Selector is a local-first CLI engine for AI-assisted photo culling and critique.
+Photo Selector is evolving into a local-first photography editor agent: a tool that helps photographers review whole shoots, compare similar frames, explain editorial decisions, and turn each shoot into feedback for the next one.
 
-The current MVP focuses on the shared core and command-line workflow:
+The current CLI MVP is the local engine for that direction. It focuses on the foundations that make a long-lived photography assistant possible:
 
 - Scan photo directories and pair JPG/JPEG files with matching RAW files.
 - Rate, pick, and critique photos with OpenAI-compatible vision models.
 - Store results in a local SQLite catalog under the user's config directory.
 - Keep API keys out of config files by using system credential stores or environment variables.
 - Export selected JPG+RAW pairs without modifying the original source directory.
-- Emit JSON output for scripts and future agent/MCP integrations.
+- Emit JSON output and audit logs for scripts, eval harnesses, and future agent/MCP integrations.
+
+The long-term value is not one-off AI scoring. Photo Selector should learn from a user's shoots over time: what was kept, exported, edited, or rejected; which frames were near-duplicates; what failure patterns repeat; and how the user's photographic taste develops.
 
 The desktop GUI is intentionally not part of the current MVP. It is planned as a future replaceable shell over the same core engine.
 
 ## Status
 
-Early CLI MVP. Expect prompt, model, and workflow tuning to continue.
+Early CLI MVP. The current product can cull and critique photos, but the design direction is moving toward shoot-level review, prompt/model evaluation, and personal photography feedback loops.
+
+## Product Direction
+
+Photo Selector should grow beyond single-image ratings into a photography review system:
+
+- **Shoot review**: summarize a whole directory as one photographic session, not just independent photos.
+- **Sequence comparison**: group visually similar or adjacent frames and explain which one is strongest.
+- **Editorial memory**: retain AI ratings, manual marks, exports, and audit trails so future recommendations can learn from past choices.
+- **Photography coaching**: identify repeated weaknesses in composition, timing, light, subject clarity, editing intent, and storytelling.
+- **Agent chat workbench**: let the user ask for shoot overviews, contact sheets, sequence comparisons, winner explanations, exports, and learning notes in natural language while keeping the photos visible.
+- **Prompt/model evaluation**: use stable JSON output and audit logs so external eval harnesses can compare prompts, models, and rubrics against fixed photo sets.
+- **Local-first workflow**: keep the catalog, credentials, and user decisions on the user's machine; cloud models are providers, not the product core.
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged product roadmap.
 
 ## Requirements
 
 - .NET 10 SDK
 - A vision-capable OpenAI-compatible provider, such as OpenRouter or a local compatible server
 
+Command examples use PowerShell/pwsh on Windows and Bash/Zsh on Linux or macOS.
+
 ## Build
 
 Build and test from source:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
+dotnet build
+dotnet test
+```
+
+Linux/macOS (Bash/Zsh):
+
+```bash
 dotnet build
 dotnet test
 ```
 
 Run the CLI from source:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 dotnet run --project src\PhotoSelector.Cli -- help
+```
+
+Linux/macOS (Bash/Zsh):
+
+```bash
+dotnet run --project src/PhotoSelector.Cli -- help
 ```
 
 Publish a self-contained NativeAOT CLI for your platform:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r <RID> --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-<RID>-aot
+```
+
+Linux/macOS (Bash/Zsh):
+
+```bash
+dotnet publish src/PhotoSelector.Cli/PhotoSelector.Cli.csproj -c Release -r <RID> --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts/photo-selector-cli-<RID>-aot
 ```
 
 Common runtime identifiers include `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`.
 
 Example for Windows ARM64:
 
-```powershell
+```pwsh
 dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj -c Release -r win-arm64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts\photo-selector-cli-win-arm64-aot-latest
+```
+
+Example for Linux x64:
+
+```bash
+dotnet publish src/PhotoSelector.Cli/PhotoSelector.Cli.csproj -c Release -r linux-x64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -o artifacts/photo-selector-cli-linux-x64-aot-latest
 ```
 
 ## Release
@@ -57,7 +106,9 @@ GitHub Releases are built by `.github/workflows/release.yml`.
 
 Create and push a semantic version tag:
 
-```powershell
+All supported shells:
+
+```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
@@ -68,7 +119,9 @@ The workflow runs tests, publishes NativeAOT CLI packages for Windows, Linux, an
 
 Configure a provider:
 
-```powershell
+All supported shells:
+
+```bash
 photo-selector config set provider openrouter
 photo-selector config set base_url https://openrouter.ai/api/v1
 photo-selector config set model <vision-model>
@@ -76,28 +129,64 @@ photo-selector config set model <vision-model>
 
 Store an API key in the system credential store:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 Get-Content key.txt | photo-selector auth login --profile default --api-key-stdin
+photo-selector auth status --verbose
+```
+
+Linux/macOS (Bash/Zsh):
+
+```bash
+cat key.txt | photo-selector auth login --profile default --api-key-stdin
 photo-selector auth status --verbose
 ```
 
 Run photo culling:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 photo-selector pick "C:\Photos\Shoot" --concurrency 2
 ```
 
+Linux/macOS (Bash/Zsh):
+
+```bash
+photo-selector pick "$HOME/Photos/Shoot" --concurrency 2
+```
+
+The next product layer will focus on shoot review: grouping similar frames, recommending winners per group, and generating a session-level review. Current commands such as `pick`, `results`, `mark`, `arena`, and audit logs are the groundwork for that workflow.
+
 Inspect results:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 photo-selector results "C:\Photos\Shoot"
 photo-selector results "C:\Photos\Shoot" --json
 ```
 
+Linux/macOS (Bash/Zsh):
+
+```bash
+photo-selector results "$HOME/Photos/Shoot"
+photo-selector results "$HOME/Photos/Shoot" --json
+```
+
 Export selected pairs:
 
-```powershell
+Windows (PowerShell/pwsh):
+
+```pwsh
 photo-selector export keep "C:\Photos\Shoot" "C:\Photos\Exports"
+```
+
+Linux/macOS (Bash/Zsh):
+
+```bash
+photo-selector export keep "$HOME/Photos/Shoot" "$HOME/Photos/Exports"
 ```
 
 ## Main Commands

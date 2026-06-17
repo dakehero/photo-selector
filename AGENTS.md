@@ -2,9 +2,21 @@
 
 ## Project Direction
 
-Photo Selector is evolving into a photography coaching agent app. The CLI, future GUI, and future agent surfaces must share the same config, auth, provider clients, database, and audit logs.
+Photo Selector is evolving into a local-first photography editor and coaching agent. Its product value should come from reviewing whole shoots, comparing similar frames, explaining editorial choices, and turning repeated photo work into long-term feedback for the photographer. Single-photo AI rating is a supporting signal, not the product's final purpose.
+
+The CLI, future GUI, and future agent surfaces must share the same config, auth, provider clients, database, and audit logs.
 
 The C# codebase is the local engine. The first MVP is CLI/core focused. A GUI is still intended but not implemented in this repository right now; future Tauri, WinUI, SwiftUI, MAUI, Avalonia, CLI, or MCP surfaces must reuse the same core projects instead of duplicating business logic.
+
+Near-term product direction:
+
+- Keep the existing CLI MVP useful for culling, rating, marking, export, and audit inspection.
+- Add value above one-off model calls by moving toward shoot-level review: sequence grouping, best-frame selection within groups, session summaries, repeated failure patterns, and next-shoot coaching notes.
+- Treat prompt/model arena and raw audit logs as evaluation infrastructure. External eval harnesses should be able to call the CLI and compare prompts, models, rubrics, and output stability.
+- Treat user marks, exports, and future edit/publish signals as durable feedback. The catalog should help the agent learn the user's taste over time.
+- Keep local model support as a provider/backend concern. Do not let local inference experiments displace the core shoot-review and eval workflow.
+- Implement similar-frame grouping with local heuristics, perceptual hashes, and lightweight embeddings before using expensive VLM calls. VLMs should explain and review reduced candidate groups, not brute-force every frame.
+- Future agent chat should orchestrate explicit internal tools such as open shoot, build contact sheet, group sequences, compare group, review group, review shoot, mark photo, export selection, and create learning note. Do not let the chat layer directly mutate storage or UI state without going through shared services and confirmation rules.
 
 ## Code Map
 
@@ -70,6 +82,13 @@ AI rating JSON must include `photo_type`, `score`, `category`, `criteria`, and `
 - `category` must match score: `keep` for `8.0-10.0`, `maybe` for `5.0-7.9`, `reject` for `1.0-4.9`.
 - Human-readable comments follow `output_language`; JSON property names stay stable English.
 
+Ratings are low-level observations. Product features should prefer higher-level concepts when possible:
+
+- `shoot review`: a directory/session-level summary with winners, weak patterns, and next-shoot suggestions.
+- `sequence/group review`: comparison of adjacent or visually similar frames with a recommended keeper.
+- `learning note`: a durable observation about the user's recurring photographic strengths or weaknesses.
+- `eval trace`: a stable prompt/model/output record that can be used by external harnesses.
+
 ## Catalog Workflow
 
 Default workflows use the shared SQLite catalog at `ConfigPaths.GetDatabasePath()`.
@@ -85,6 +104,8 @@ Default workflows use the shared SQLite catalog at `ConfigPaths.GetDatabasePath(
 - `open <project-id|directory> --json` returns one project context and its photos.
 - `photos list --project <project-id> --json` returns photos for one project.
 - Do not add user-facing commands that require SQLite database paths. Database paths are an internal/debug concern, not product UX.
+
+Future catalog-first product actions should be phrased around photographer intent, not implementation machinery. Prefer commands and APIs such as `review <directory>`, `compare`, `learning notes`, or eval-oriented JSON outputs over exposing worker, job, or database details.
 
 Worker implementation detail:
 

@@ -2,7 +2,9 @@
 
 ## Goal
 
-Build a cross-platform, native-feeling desktop app for quickly selecting photos from a shoot. The app should help a user scan a folder, manage JPG+RAW file pairs, use AI to score and classify images, manually confirm the final choices, and export selected JPG+RAW pairs without modifying the original folder.
+Build a local-first photography editor and coaching agent. The app should help a photographer review a whole shoot, compare similar frames, explain editorial choices, identify repeated weaknesses, and turn each session into feedback for the next one.
+
+Quick culling remains important, but one-off AI scoring is not the product's core value. The product should become useful because it accumulates local context: JPG+RAW pairs, AI observations, user marks, exports, audit trails, prompt/model comparisons, and eventually edit/publish signals.
 
 ## Product Scope
 
@@ -18,6 +20,16 @@ The minimum useful workflow is:
 6. Export selected JPG+RAW pairs to a target directory by copying files.
 
 The app must not move, delete, rename, or overwrite files in the original source directory.
+
+The next product layer is shoot review:
+
+1. Treat a directory as one photographic session, not just a bag of independent files.
+2. Group adjacent or visually similar frames into sequences.
+3. Recommend the strongest frame in each sequence and explain why it beats nearby alternatives.
+4. Produce a session-level review: strongest candidates, weak patterns, missed opportunities, and next-shoot advice.
+5. Preserve human feedback so later reviews can learn from the user's real decisions.
+
+The current CLI commands are still useful because they provide the storage, audit, provider, export, and JSON surfaces needed for this larger workflow.
 
 ## Technology Choice
 
@@ -68,11 +80,40 @@ Tables:
 - `exports`: export id, project id, target directory, filter, exported count, created time.
 - `export_items`: export id, photo id, exported jpg path, exported raw path.
 
+Future shoot-review tables should be added when the workflow is implemented:
+
+- `photo_groups`: project id, group type, representative photo id, grouping reason, created time.
+- `photo_group_items`: group id, photo id, order, similarity score, group-local rank.
+- `shoot_reviews`: project id, provider, model, prompt version, summary, strengths, weaknesses, next-shoot advice, created time.
+- `learning_notes`: project id or global scope, topic, evidence JSON, note, confidence, created time.
+- `eval_runs`: prompt version, model, dataset or project selector, metrics JSON, created time.
+
 AI categories are `keep`, `maybe`, and `reject`.
 
 Scores are decimal values from `1.0` to `10.0` with exactly one decimal place. Each criterion score follows the same format.
 
 User decisions are `unreviewed`, `keep`, `maybe`, and `reject`.
+
+Design note: ratings are evidence, not the final product object. The catalog should make it possible to explain why a photo was selected, why a nearby frame was rejected, and how user feedback changed the agent's future decisions.
+
+## Local Similarity Grouping
+
+Similar-frame grouping should be a local, cheap, deterministic workflow. It should not depend on a large vision-language model. Large models are better reserved for editorial judgment, group-level explanation, and shoot-level review after the candidate set has been reduced.
+
+Recommended grouping layers:
+
+1. **File and time heuristics**: use adjacent file names, capture timestamps, same directory, and nearby EXIF values to create candidate windows. This catches burst sequences and same-scene variations without model inference.
+2. **Perceptual hashes**: compute pHash/dHash/aHash and simple color histograms to detect near-duplicates, slight exposure edits, and very similar frames on CPU.
+3. **Lightweight image embeddings**: optionally use a local embedding model such as CLIP, MobileCLIP, SigLIP, or DINOv2-small to compare visual similarity with cosine distance.
+4. **Graph or hierarchical clustering**: combine the signals inside a time/file candidate window and form groups. Avoid global-only embedding clustering, which can incorrectly group visually similar photos from unrelated shoots.
+
+The workflow should reduce expensive VLM calls:
+
+```text
+1000 photos -> local grouping -> 100-200 candidate frames -> VLM review/explanation
+```
+
+Group records should be auditable. Store the grouping method, thresholds, representative photo, similarity scores, and group-local order when the feature is implemented. Grouping is a core product capability because it enables contact-sheet review and pairwise editorial decisions.
 
 ## Future Desktop UI
 
@@ -82,8 +123,30 @@ Layout:
 
 - Left sidebar: current project directory, scan summary, filters, AI status.
 - Main area: thumbnail grid using JPG previews where available.
-- Right panel: selected photo details, JPG/RAW pair status, AI score, AI reason, user decision, stars, and notes.
+- Right panel: selected photo details, JPG/RAW pair status, group membership, AI score, AI reason, user decision, stars, and notes.
 - Top toolbar: open/import directory, scan synchronously, show processing status, export selected, settings.
+
+Shoot-review UI requirements:
+
+- Contact sheet view for the whole shoot.
+- Group strip for similar or adjacent frames.
+- Compare view for 2-4 frames in one group.
+- Visible group winner, alternates, rejects, and explanation.
+- Session review panel with strengths, weak patterns, and next-shoot notes.
+- Fast feedback controls so user corrections become durable training/eval signals.
+
+Agent chat should be a first-class UI surface alongside the visual workbench. It should not replace contact sheets or compare views; it should coordinate them.
+
+Agent chat responsibilities:
+
+- Accept natural-language goals such as "review this shoot", "show me the best landscape frames", "compare these four", or "why did you pick this one".
+- Call built-in tools for scan/index, local grouping, contact sheet generation, group comparison, VLM review, export preview, and learning-note creation.
+- Navigate or update the visual workbench: open a shoot overview, focus a sequence group, pin a compare view, or show the evidence behind a winner.
+- Explain decisions with references to concrete photos, groups, scores, user marks, and audit records.
+- Ask for confirmation before destructive or high-impact actions. It must never delete, move, rename, overwrite, or export files without explicit user intent.
+- Record user feedback from natural language when clear, such as "mark this one as keep", "the third frame is actually better", or "remember that I prefer the darker edit".
+
+The ideal interaction is conversational plus visual: the user can ask the agent to do work in natural language, but the final selection, comparison, and learning loop remain grounded in visible photos and explicit feedback.
 
 Expected shortcuts:
 
@@ -131,6 +194,55 @@ An external agent command adapter is reserved for a later step. Its interface sh
 
 AI provider settings are stored globally in the user's app settings. Secrets are not stored in config, database, or logs. Each rating and audit row stores enough non-secret provider/model/prompt/response detail so project history remains understandable after settings change.
 
+## Prompt And Model Evaluation
+
+Prompt/model evaluation is a product capability, but the first implementation should not bury a complex eval harness inside the CLI. Photo Selector should expose stable, machine-readable commands and audit logs so external tools can evaluate it.
+
+Near-term eval direction:
+
+- Keep `rate`, `pick`, `coach`, `arena`, `results --audit --json`, and raw audit logs stable enough for external harnesses.
+- Use fixed photo sets, human labels, pairwise preferences, and prompt versions outside the core CLI.
+- Compare prompt/model combinations for selection accuracy, ranking quality, JSON parse success, cost, latency, hallucination rate, and critique usefulness.
+- Treat public photography/aesthetic datasets and the user's own marked shoots as evaluation sources.
+- Use photography websites, books, and magazines mainly to extract rubrics and critique dimensions, not as unlicensed training text or image corpora.
+
+The evaluation goal is to answer whether the system behaves like a reliable photography editor, not whether it can generate a pretty paragraph for one image.
+
+## Agent Automation Boundary
+
+Photo Selector should support agent automation, but the first valuable agent behavior should be bounded workflow orchestration rather than an autonomous daemon.
+
+The future agent chat UI should call explicit internal tools rather than reaching into UI or database internals directly.
+
+Initial internal tool set:
+
+- `open_shoot(directory)`: scan or open a catalog project and return shoot context.
+- `build_contact_sheet(project_id, filters)`: return thumbnail grid data for the visual workbench.
+- `group_sequences(project_id, options)`: run local similarity grouping and return groups.
+- `compare_group(group_id, photo_ids)`: prepare a 2-4 photo compare view and group-local evidence.
+- `review_group(group_id)`: call the configured VLM on selected candidates and produce winner explanation.
+- `review_shoot(project_id)`: synthesize shoot overview, strengths, weak patterns, and next-shoot notes from groups, ratings, marks, and audit data.
+- `mark_photo(photo_id, decision, stars, note)`: save explicit user feedback.
+- `export_selection(project_id, category_or_selection, target)`: stage or perform non-destructive export after user confirmation.
+- `create_learning_note(scope, evidence, note)`: store durable coaching observations.
+
+Useful near-term automation:
+
+- Run deterministic local grouping before calling a VLM.
+- Select a small set of representative frames per group for expensive review.
+- Retry failed AI jobs with preserved audit logs.
+- Generate a shoot-review draft from existing ratings, groups, and user marks.
+- Export machine-readable JSON for external eval harnesses and future MCP tools.
+
+Avoid near-term automation that hides product decisions:
+
+- Do not automatically delete, move, rename, or overwrite source photos.
+- Do not silently reprocess entire catalogs without a user command or future GUI session.
+- Do not make worker management a user-facing product surface.
+- Do not implement a broad autonomous agent before the grouping, review, and feedback contracts are stable.
+
+The agent layer should behave like a careful photography assistant: it prepares groups, proposes winners, explains tradeoffs, and records feedback, while the user remains in control of final decisions.
+
 ## CLI
 
 The CLI exists for batch use and for AI agents to call. It must not expose SQLite database paths in normal user-facing commands.
@@ -175,6 +287,22 @@ photo-selector photos list --project <project-id> --json
 `export` copies JPG+RAW pairs whose latest AI rating matches the requested category into a timestamped export directory under the target root.
 
 `projects`, `open`, and `photos` expose catalog state for humans, scripts, and future agent surfaces.
+
+Future CLI direction:
+
+```bash
+photo-selector review <directory> [--json]
+photo-selector compare <directory> --group <group-id> [--json]
+photo-selector learning notes [directory] [--json]
+```
+
+`review` should become the product-facing shoot review command. It should scan or update a directory, group similar frames, recommend winners per group, summarize the shoot, and produce next-shoot coaching notes.
+
+`compare` should explain why one frame in a group is stronger than its neighbors.
+
+`learning notes` should expose durable observations about recurring strengths and weaknesses. These notes should come from user-confirmed history, not from a single model response.
+
+Do not implement these commands until the grouping and review contracts are designed and tested. They are listed here to steer product direction away from endless single-image rating features.
 
 ## Export Behavior
 
@@ -244,6 +372,7 @@ Future GUI tests:
 - Cloud sync.
 - Multi-user projects.
 - RAW rendering beyond showing the paired file path and using JPG previews.
+- Built-in local ONNX/VLM runtime and model management. Local model support should remain a provider/backend experiment until the shoot-review and eval workflows justify the added complexity.
 
 ## Implementation Defaults
 
