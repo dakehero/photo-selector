@@ -54,6 +54,78 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Groups_json_outputs_in_memory_filename_sequence_groups_for_indexed_project()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0002.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0004.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0010.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0011.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "cover.JPG"), "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["groups", sourceDirectory, "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("filename-sequence", document.RootElement.GetProperty("method").GetString());
+        Assert.Equal(2, document.RootElement.GetProperty("maxFilenameGap").GetInt32());
+        Assert.Equal(10, document.RootElement.GetProperty("maxCaptureTimeGapSeconds").GetInt32());
+        var stages = document.RootElement.GetProperty("stages").EnumerateArray().ToArray();
+        Assert.Equal("filename-sequence", stages[0].GetProperty("name").GetString());
+        Assert.Equal("applied", stages[0].GetProperty("status").GetString());
+        Assert.Equal("capture-time-window", stages[1].GetProperty("name").GetString());
+        Assert.Equal("applied-when-present", stages[1].GetProperty("status").GetString());
+        Assert.Equal("ai-encoder", stages[2].GetProperty("name").GetString());
+        Assert.Equal("reserved", stages[2].GetProperty("status").GetString());
+        Assert.Equal(sourceDirectory, document.RootElement.GetProperty("project").GetProperty("sourceDirectory").GetString());
+        var groups = document.RootElement.GetProperty("groups").EnumerateArray().ToArray();
+        Assert.Equal(2, groups.Length);
+        Assert.Equal("filename-sequence:IMG_:0001-0004", groups[0].GetProperty("id").GetString());
+        Assert.Equal("sequence", groups[0].GetProperty("type").GetString());
+        Assert.Equal("IMG_", groups[0].GetProperty("key").GetString());
+        Assert.Equal("filename sequence within gap 2; capture time gap <= 10s when available", groups[0].GetProperty("reason").GetString());
+        Assert.Equal(["IMG_0001", "IMG_0002", "IMG_0004"], groups[0].GetProperty("items").EnumerateArray().Select(item => item.GetProperty("baseName").GetString() ?? string.Empty).ToArray());
+        Assert.Equal([0, 1, 2], groups[0].GetProperty("items").EnumerateArray().Select(item => item.GetProperty("order").GetInt32()).ToArray());
+        Assert.Equal("filename-sequence:IMG_:0010-0011", groups[1].GetProperty("id").GetString());
+        Assert.Equal(["IMG_0010", "IMG_0011"], groups[1].GetProperty("items").EnumerateArray().Select(item => item.GetProperty("baseName").GetString() ?? string.Empty).ToArray());
+    }
+
+    [Fact]
+    public void Groups_json_uses_exif_capture_time_to_split_filename_sequences()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0001.JPG"), PhotoMetadataReaderTests.CreateExifJpeg("2026:06:18 10:00:00"));
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0002.JPG"), PhotoMetadataReaderTests.CreateExifJpeg("2026:06:18 10:00:02"));
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0003.JPG"), PhotoMetadataReaderTests.CreateExifJpeg("2026:06:18 10:05:00"));
+        File.WriteAllBytes(Path.Combine(sourceDirectory, "IMG_0004.JPG"), PhotoMetadataReaderTests.CreateExifJpeg("2026:06:18 10:05:02"));
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        var output = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["groups", sourceDirectory, "--json"], output, TextWriter.Null));
+
+        using var document = JsonDocument.Parse(output.ToString());
+        var groups = document.RootElement.GetProperty("groups").EnumerateArray().ToArray();
+        Assert.Equal(2, groups.Length);
+        Assert.Equal(["IMG_0001", "IMG_0002"], groups[0].GetProperty("items").EnumerateArray().Select(item => item.GetProperty("baseName").GetString() ?? string.Empty).ToArray());
+        Assert.Equal(["IMG_0003", "IMG_0004"], groups[1].GetProperty("items").EnumerateArray().Select(item => item.GetProperty("baseName").GetString() ?? string.Empty).ToArray());
+    }
+
+    [Fact]
     public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();
@@ -142,6 +214,7 @@ public sealed class CliSmokeTests
         Assert.True(pick.GetProperty("output").GetProperty("json").GetBoolean());
         Assert.Equal("directory", pick.GetProperty("arguments")[0].GetProperty("kind").GetString());
         Assert.Contains(commands, command => command.GetProperty("name").GetString() == "projects list");
+        Assert.Contains(commands, command => command.GetProperty("name").GetString() == "groups");
         Assert.DoesNotContain(commands, command => command.GetProperty("name").GetString() == "process");
     }
 

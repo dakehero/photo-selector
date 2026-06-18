@@ -46,6 +46,26 @@ public sealed class ProjectDatabaseTests
     }
 
     [Fact]
+    public void ReplacePhotos_stores_jpeg_exif_capture_time_when_available()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, PhotoMetadataReaderTests.CreateExifJpeg("2026:06:18 10:11:12"));
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+
+        var photo = Assert.Single(database.ListPhotos(projectId));
+        Assert.Equal(new DateTimeOffset(2026, 6, 18, 10, 11, 12, TimeSpan.Zero), photo.CaptureTime);
+    }
+
+    [Fact]
     public void ReplacePhotos_fails_for_missing_project()
     {
         using var tempDirectory = new TempDirectory();

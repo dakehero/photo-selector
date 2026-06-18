@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using PhotoSelector.Core.Metadata;
 using PhotoSelector.Core.Projects;
 using PhotoSelector.Core.Scanning;
 
@@ -242,6 +243,7 @@ public sealed class ProjectDatabase : IDisposable
             importedBaseNames.Add(pair.BaseName);
             var jpegFingerprint = GetFileFingerprint(pair.JpegPath);
             var rawFingerprint = GetFileFingerprint(pair.RawPath);
+            var captureTime = PhotoMetadataReader.ReadCaptureTime(pair.JpegPath);
             using var existingCommand = connection.CreateCommand();
             existingCommand.Transaction = transaction;
             existingCommand.CommandText = """
@@ -290,7 +292,7 @@ public sealed class ProjectDatabase : IDisposable
                 insertCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
                 insertCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
                 insertCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
-                insertCommand.Parameters.AddWithValue("$capture_time", DBNull.Value);
+                insertCommand.Parameters.AddWithValue("$capture_time", (object?)FormatNullableTimestamp(captureTime) ?? DBNull.Value);
                 insertCommand.Parameters.AddWithValue("$import_status", "imported");
                 insertCommand.Parameters.AddWithValue("$jpeg_size", (object?)jpegFingerprint.Size ?? DBNull.Value);
                 insertCommand.Parameters.AddWithValue("$jpeg_mtime_utc", (object?)jpegFingerprint.ModifiedAt ?? DBNull.Value);
@@ -336,6 +338,7 @@ public sealed class ProjectDatabase : IDisposable
                 SET base_name = $base_name,
                     jpeg_path = $jpeg_path,
                     raw_path = $raw_path,
+                    capture_time = $capture_time,
                     import_status = $import_status,
                     jpeg_size = $jpeg_size,
                     jpeg_mtime_utc = $jpeg_mtime_utc,
@@ -347,6 +350,7 @@ public sealed class ProjectDatabase : IDisposable
             updateCommand.Parameters.AddWithValue("$base_name", pair.BaseName);
             updateCommand.Parameters.AddWithValue("$jpeg_path", (object?)pair.JpegPath ?? DBNull.Value);
             updateCommand.Parameters.AddWithValue("$raw_path", (object?)pair.RawPath ?? DBNull.Value);
+            updateCommand.Parameters.AddWithValue("$capture_time", (object?)FormatNullableTimestamp(captureTime) ?? DBNull.Value);
             updateCommand.Parameters.AddWithValue("$import_status", changed ? "changed" : "imported");
             updateCommand.Parameters.AddWithValue("$jpeg_size", (object?)jpegFingerprint.Size ?? DBNull.Value);
             updateCommand.Parameters.AddWithValue("$jpeg_mtime_utc", (object?)jpegFingerprint.ModifiedAt ?? DBNull.Value);
@@ -1169,6 +1173,11 @@ public sealed class ProjectDatabase : IDisposable
     private static string FormatTimestamp(DateTimeOffset value)
     {
         return value.ToUniversalTime().ToString("O");
+    }
+
+    private static string? FormatNullableTimestamp(DateTimeOffset? value)
+    {
+        return value is null ? null : FormatTimestamp(value.Value);
     }
 
     private static bool IsUserDecision(string decision)

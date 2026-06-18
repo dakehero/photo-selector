@@ -9,6 +9,7 @@ using PhotoSelector.Ai.Ratings;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Exporting;
+using PhotoSelector.Core.Grouping;
 using PhotoSelector.Core.Projects;
 using PhotoSelector.Core.Storage;
 using Spectre.Console;
@@ -92,6 +93,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildStatusCommand(output, error));
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(BuildResultsCommand(output, error));
+        root.Subcommands.Add(BuildGroupsCommand(output, error));
         root.Subcommands.Add(BuildMarkCommand(output, error));
         root.Subcommands.Add(BuildExportCommand(output, error));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
@@ -1245,6 +1247,54 @@ public static partial class CliApp
         }
     }
 
+    private static Command BuildGroupsCommand(TextWriter output, TextWriter error)
+    {
+        var command = new Command("groups", "Show in-memory photo sequence groups for one indexed project.");
+        var directoryArgument = new Argument<string>("directory");
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunGroups(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
+
+    private static int RunGroups(string directory, bool json, TextWriter output, TextWriter error)
+    {
+        if (!json)
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, directory);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {directory}");
+            return 1;
+        }
+
+        var options = SequenceGroupingOptions.Default;
+        var groups = FilenameSequenceGrouper
+            .Group(database.ListPhotos(project.Id), options)
+            .Select(ToPhotoGroupJson)
+            .ToArray();
+        var payload = new GroupsJson(
+            ToProjectScopeJson(project)!,
+            FilenameSequenceGrouper.Method,
+            options.MaxFilenameGap,
+            options.MaxCaptureTimeGap is null ? null : (int?)options.MaxCaptureTimeGap.Value.TotalSeconds,
+            options.Stages.Select(stage => new GroupingStageJson(stage.Name, stage.Status)).ToArray(),
+            groups);
+
+        output.WriteLine(JsonSerializer.Serialize(payload, CliJsonContext.Default.GroupsJson));
+        return 0;
+    }
+
     private static void WriteArenaSummary(ProjectDatabase database, long arenaRunId, TextWriter output)
     {
         var ratings = database.ListArenaRatings(arenaRunId);
@@ -2077,6 +2127,22 @@ public static partial class CliApp
         return project is null ? null : new ProjectScopeJson(project.Id, project.SourceDirectory);
     }
 
+    private static PhotoGroupJson ToPhotoGroupJson(PhotoGroup group)
+    {
+        return new PhotoGroupJson(
+            group.Id,
+            group.Type,
+            group.Key,
+            group.Reason,
+            group.Items
+                .Select(item => new PhotoGroupItemJson(
+                    item.PhotoId,
+                    item.BaseName,
+                    item.Order,
+                    item.SequenceNumber))
+                .ToArray());
+    }
+
     private static JobSummaryJson ToJobSummaryJson(RatingJobSummary summary)
     {
         return new JobSummaryJson(summary.Total, summary.Pending, summary.Completed, summary.Failed);
@@ -2276,6 +2342,14 @@ public static partial class CliApp
             new HelpOutputJson(true, true, "Rating results summary or one photo audit trace."),
             ["photo-selector results \"C:\\Photos\\Shoot\" --json", "photo-selector results \"C:\\Photos\\Shoot\" --photo DSC_0001 --audit --json"]),
         new(
+            "groups",
+            "photo-selector groups <directory> --json",
+            "Compute in-memory filename sequence groups for one indexed project.",
+            [new HelpArgumentJson("directory", true, "path", "directory", "Indexed project directory.")],
+            [JsonOption],
+            new HelpOutputJson(false, true, "Derived sequence groups."),
+            ["photo-selector groups \"C:\\Photos\\Shoot\" --json"]),
+        new(
             "mark",
             "photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]",
             "Save a manual decision, star rating, and note for one catalog photo.",
@@ -2451,6 +2525,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(ScanJson))]
     [JsonSerializable(typeof(ResultsJson))]
     [JsonSerializable(typeof(ResultsPhotoJson))]
+    [JsonSerializable(typeof(GroupsJson))]
     [JsonSerializable(typeof(MarkJson))]
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
@@ -2533,6 +2608,31 @@ public static partial class CliApp
         ProjectScopeJson Project,
         PhotoRatingResultJson Photo,
         PhotoRatingAuditJson[] Audit);
+
+    private sealed record GroupsJson(
+        ProjectScopeJson Project,
+        string Method,
+        int MaxFilenameGap,
+        int? MaxCaptureTimeGapSeconds,
+        GroupingStageJson[] Stages,
+        PhotoGroupJson[] Groups);
+
+    private sealed record GroupingStageJson(
+        string Name,
+        string Status);
+
+    private sealed record PhotoGroupJson(
+        string Id,
+        string Type,
+        string Key,
+        string Reason,
+        PhotoGroupItemJson[] Items);
+
+    private sealed record PhotoGroupItemJson(
+        long PhotoId,
+        string BaseName,
+        int Order,
+        long SequenceNumber);
 
     private sealed record MarkJson(
         ProjectScopeJson Project,

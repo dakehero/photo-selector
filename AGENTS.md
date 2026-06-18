@@ -99,6 +99,7 @@ Default workflows use the shared SQLite catalog at `ConfigPaths.GetDatabasePath(
 - `reset ratings <directory>` resets AI rating outputs for that directory so the next `pick` or `scan` can evaluate it again.
 - `reset ratings <directory> --with-audit` may delete audit logs too. By default, preserve audit logs for traceability.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates without exposing database paths.
+- `groups <directory> --json` computes in-memory sequence groups for one indexed project using staged local filters. Filename sequence matching is applied first, JPEG EXIF capture-time metadata is used when present, and an AI encoder/embedding stage is reserved for future visual similarity. It is derived workflow data and must not require SQLite group tables yet.
 - `export <keep|maybe|reject> <directory> <target>` copies JPG+RAW pairs whose latest AI rating matches the category into a timestamped export directory.
 - `projects list --json` lists indexed projects without exposing a database path.
 - `open <project-id|directory> --json` returns one project context and its photos.

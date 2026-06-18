@@ -198,6 +198,7 @@ photo-selector export keep "$HOME/Photos/Shoot" "$HOME/Photos/Exports"
 - `arena <directory> --models <model-a,model-b>`: compare models on the same photo set.
 - `results [directory]`: summarize ratings.
 - `results [directory] --photo <photo-id|base-name> --audit --json`: inspect one decision trace.
+- `groups <directory> --json`: compute in-memory sequence groups with filename and JPEG EXIF capture-time stages, with an AI encoder stage reserved for future visual similarity.
 - `mark <directory> <photo-id|base-name>`: save manual decisions and notes.
 - `export <keep|maybe|reject> <directory> <target>`: copy selected JPG+RAW pairs.
 - `help --json`: expose machine-readable CLI help.
