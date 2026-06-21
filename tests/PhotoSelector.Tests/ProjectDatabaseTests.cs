@@ -7,6 +7,19 @@ namespace PhotoSelector.Tests;
 public sealed class ProjectDatabaseTests
 {
     [Fact]
+    public void ProjectDatabase_uses_linq2db_instead_of_hand_written_sql_commands()
+    {
+        var sourcePath = FindRepositoryFile("src/PhotoSelector.Core/Storage/ProjectDatabase.cs");
+        var source = File.ReadAllText(sourcePath);
+
+        Assert.DoesNotContain("CommandText", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateCommand", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteReader", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteScalar", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteNonQuery", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Project_database_saves_projects_and_replaces_photos()
     {
         using var tempDirectory = new TempDirectory();
@@ -117,6 +130,29 @@ public sealed class ProjectDatabaseTests
     }
 
     [Fact]
+    public void ResetRatings_preserves_audit_logs_with_cleared_rating_reference_by_default()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", Path.Combine(sourceDirectory, "IMG_0001.JPG"), null)]);
+        var photo = Assert.Single(database.ListPhotos(projectId));
+        var ratingId = database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+        database.SaveRatingAuditLog(photo.Id, ratingId, "openrouter", "model-a", "prompt", "{}", "{}", "{}", 200, null);
+
+        var deleted = database.ResetRatings(projectId);
+
+        Assert.Equal(1, deleted);
+        Assert.Empty(database.ListRatings(photo.Id));
+        var audit = Assert.Single(database.ListRatingAuditLogs(photo.Id));
+        Assert.Null(audit.RatingId);
+    }
+
+    [Fact]
     public void Migrate_keeps_one_schema_version_row()
     {
         using var tempDirectory = new TempDirectory();
@@ -196,5 +232,22 @@ public sealed class ProjectDatabaseTests
         {
             Directory.Delete(Path, recursive: true);
         }
+    }
+
+    private static string FindRepositoryFile(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException($"Could not find repository file: {relativePath}");
     }
 }
