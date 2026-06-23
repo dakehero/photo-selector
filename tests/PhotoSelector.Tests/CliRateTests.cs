@@ -201,6 +201,62 @@ public sealed class CliRateTests
     }
 
     [Fact]
+    public void Results_and_status_treat_changed_and_missing_photos_as_not_currently_rated()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var changedJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        var missingJpeg = Path.Combine(sourceDirectory, "IMG_0002.JPG");
+        File.WriteAllText(changedJpeg, "before");
+        File.WriteAllText(missingJpeg, "missing");
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(
+                projectId,
+                [
+                    new PhotoPair("IMG_0001", changedJpeg, null),
+                    new PhotoPair("IMG_0002", missingJpeg, null),
+                ]);
+            var photos = database.ListPhotos(projectId);
+            foreach (var photo in photos)
+            {
+                database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Old keeper.");
+            }
+
+            File.WriteAllText(changedJpeg, "after");
+            File.SetLastWriteTimeUtc(changedJpeg, DateTime.UtcNow.AddMinutes(5));
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", changedJpeg, null)]);
+        }
+
+        var resultsOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["results", sourceDirectory, "--json"], resultsOutput, TextWriter.Null));
+        using var resultsJson = JsonDocument.Parse(resultsOutput.ToString());
+        var summary = resultsJson.RootElement.GetProperty("summary");
+        Assert.Equal(2, summary.GetProperty("photos").GetInt32());
+        Assert.Equal(0, summary.GetProperty("rated").GetInt32());
+        Assert.Equal(1, summary.GetProperty("changed").GetInt32());
+        Assert.Equal(1, summary.GetProperty("missing").GetInt32());
+        Assert.Equal(0, summary.GetProperty("keep").GetInt32());
+        var all = resultsJson.RootElement.GetProperty("all").EnumerateArray().ToArray();
+        Assert.Equal("stale", all.Single(photo => photo.GetProperty("baseName").GetString() == "IMG_0001").GetProperty("status").GetString());
+        Assert.Equal("missing", all.Single(photo => photo.GetProperty("baseName").GetString() == "IMG_0002").GetProperty("status").GetString());
+
+        var statusOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["status", sourceDirectory, "--json"], statusOutput, TextWriter.Null));
+        using var statusJson = JsonDocument.Parse(statusOutput.ToString());
+        Assert.Equal(2, statusJson.RootElement.GetProperty("photos").GetInt32());
+        Assert.Equal(0, statusJson.RootElement.GetProperty("rated").GetInt32());
+        Assert.Equal(0, statusJson.RootElement.GetProperty("imported").GetInt32());
+        Assert.Equal(1, statusJson.RootElement.GetProperty("changed").GetInt32());
+        Assert.Equal(1, statusJson.RootElement.GetProperty("missing").GetInt32());
+    }
+
+    [Fact]
     public void Results_photo_audit_json_outputs_decision_trace()
     {
         using var tempDirectory = new TempDirectory();
@@ -392,6 +448,67 @@ public sealed class CliRateTests
         Assert.Contains("Exported 2 file(s) from 1 photo(s)", output.ToString());
     }
 
+    [Fact]
+    public void Export_skips_missing_photos_even_when_they_have_matching_ratings()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        var targetDirectory = Path.Combine(tempDirectory.Path, "exports");
+        Directory.CreateDirectory(sourceDirectory);
+        var missingJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", missingJpeg, null)]);
+            var photo = Assert.Single(database.ListPhotos(projectId));
+            database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+            database.ReplacePhotos(projectId, []);
+        }
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["export", "keep", sourceDirectory, targetDirectory], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains("Exported 0 file(s) from 0 photo(s)", output.ToString());
+    }
+
+    [Fact]
+    public void Export_skips_changed_photos_until_they_are_rerated()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        var targetDirectory = Path.Combine(tempDirectory.Path, "exports");
+        Directory.CreateDirectory(sourceDirectory);
+        var changedJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllText(changedJpeg, "before");
+
+        using (var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db")))
+        {
+            database.Migrate();
+            var projectId = database.CreateProject(sourceDirectory);
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", changedJpeg, null)]);
+            var photo = Assert.Single(database.ListPhotos(projectId));
+            database.SaveRating(photo.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+            File.WriteAllText(changedJpeg, "after");
+            File.SetLastWriteTimeUtc(changedJpeg, DateTime.UtcNow.AddMinutes(5));
+            database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", changedJpeg, null)]);
+        }
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["export", "keep", sourceDirectory, targetDirectory], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Contains("Exported 0 file(s) from 0 photo(s)", output.ToString());
+    }
+
 
     [Fact]
     public void Scan_imports_directory_and_rates_jpegs_by_default()
@@ -450,6 +567,37 @@ public sealed class CliRateTests
         var project = Assert.Single(database.ListProjects());
         var photo = Assert.Single(database.ListPhotos(project.Id));
         Assert.Single(database.ListRatings(photo.Id));
+    }
+
+    [Fact]
+    public void Scan_restores_changed_photo_to_imported_after_successful_rerating()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 });
+
+        var secretStore = Login(new MemorySecretStore());
+        var client = new RecordingRatingClient(new AiRating(
+            "street",
+            8.1,
+            "keep",
+            [new AiRatingCriterion("impact", 8.0, "Strong timing.")],
+            "Strong keeper."));
+
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, client));
+        File.WriteAllBytes(jpegPath, new byte[] { 0xFF, 0xD8, 0x00, 0xFF, 0xD9 });
+        File.SetLastWriteTimeUtc(jpegPath, DateTime.UtcNow.AddMinutes(5));
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, client));
+
+        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        database.Migrate();
+        var project = Assert.Single(database.ListProjects());
+        var photo = Assert.Single(database.ListPhotos(project.Id));
+        Assert.Equal("imported", photo.ImportStatus);
+        Assert.Equal(2, database.ListRatings(photo.Id).Count);
     }
 
     [Fact]

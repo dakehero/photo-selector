@@ -61,8 +61,16 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                 continue;
             }
 
+            if (PhotoImportStatus.IsMissing(photo.ImportStatus))
+            {
+                skipped++;
+                database.MarkRatingJobFailed(job.Id, "Photo is missing.");
+                ReportProgress(photo.BaseName);
+                continue;
+            }
+
             if (!options.Force &&
-                !string.Equals(photo.ImportStatus, "changed", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(photo.ImportStatus, PhotoImportStatus.Changed, StringComparison.OrdinalIgnoreCase) &&
                 database.ListRatings(photo.Id).Count > 0)
             {
                 skipped++;
@@ -143,6 +151,7 @@ public sealed class RatingWorker(IPhotoRatingClient client)
                         result.Audit.HttpStatus,
                         result.Audit.Error);
                     database.MarkRatingJobCompleted(item.Job.Id);
+                    database.MarkPhotoImported(item.Photo.Id);
                     rated++;
                     orderedMessages[item.Index] = $"{item.Photo.BaseName}: {rating.Score} {rating.Category} - {rating.Reason}";
                 }

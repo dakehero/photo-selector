@@ -848,14 +848,24 @@ public static partial class CliApp
         }
 
         var summary = database.GetRatingJobSummary(project?.Id);
-        var rated = project is null
-            ? database.ListProjects().SelectMany(item => database.ListPhotos(item.Id)).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0)
-            : database.ListPhotos(project.Id).Sum(photo => database.ListRatings(photo.Id).Count > 0 ? 1 : 0);
+        var photos = ListScopePhotos(database, project);
+        var rated = photos.Count(photo => GetCurrentRating(database, photo) is not null);
+        var imported = photos.Count(photo => PhotoImportStatus.IsImported(photo.ImportStatus));
+        var changed = photos.Count(photo => PhotoImportStatus.IsChanged(photo.ImportStatus));
+        var missing = photos.Count(photo => PhotoImportStatus.IsMissing(photo.ImportStatus));
 
         if (json)
         {
             output.WriteLine(JsonSerializer.Serialize(
-                new StatusJson(project is null ? "all" : "project", ToProjectScopeJson(project), ToJobSummaryJson(summary), rated),
+                new StatusJson(
+                    project is null ? "all" : "project",
+                    ToProjectScopeJson(project),
+                    ToJobSummaryJson(summary),
+                    photos.Length,
+                    imported,
+                    changed,
+                    missing,
+                    rated),
                 CliJsonContext.Default.StatusJson));
             return 0;
         }
@@ -863,6 +873,10 @@ public static partial class CliApp
         output.WriteLine(project is null ? "Project: all" : $"Project: {project.SourceDirectory}");
         output.WriteLine($"jobs: {summary.Total}");
         output.WriteLine($"pending: {summary.Pending}");
+        output.WriteLine($"photos: {photos.Length}");
+        output.WriteLine($"imported: {imported}");
+        output.WriteLine($"changed: {changed}");
+        output.WriteLine($"missing: {missing}");
         output.WriteLine($"rated: {rated}");
         output.WriteLine($"failed: {summary.Failed}");
         return 0;
@@ -987,7 +1001,7 @@ public static partial class CliApp
         var (matchedProject, photo) = match;
         var result = ToPhotoResultJson(new PhotoResult(
             photo,
-            database.ListRatings(photo.Id).FirstOrDefault(),
+            GetCurrentRating(database, photo),
             database.ListRatingJobs(photo.ProjectId)
                 .Where(job => job.PhotoId == photo.Id)
                 .OrderByDescending(job => job.UpdatedAt)
@@ -1151,7 +1165,7 @@ public static partial class CliApp
             ToProjectScopeJson(matchedProject)!,
             ToPhotoResultJson(new PhotoResult(
                 photo,
-                database.ListRatings(photo.Id).FirstOrDefault(),
+                GetCurrentRating(database, photo),
                 database.ListRatingJobs(photo.ProjectId)
                     .Where(job => job.PhotoId == photo.Id)
                     .OrderByDescending(job => job.UpdatedAt)
@@ -1179,12 +1193,20 @@ public static partial class CliApp
             .SelectMany(item => database.ListPhotos(item.Id))
             .Select(photo => new PhotoResult(
                 photo,
-                database.ListRatings(photo.Id).FirstOrDefault(),
+                GetCurrentRating(database, photo),
                 jobsByPhotoId.GetValueOrDefault(photo.Id)))
             .ToArray();
         var rated = results.Where(item => item.Rating is not null).ToArray();
-        var failed = results.Count(item => item.Rating is null && item.Job?.Status == "failed");
-        var unrated = results.Count(item => item.Rating is null && item.Job?.Status != "failed");
+        var changed = results.Count(item => PhotoImportStatus.IsChanged(item.Photo.ImportStatus));
+        var missing = results.Count(item => PhotoImportStatus.IsMissing(item.Photo.ImportStatus));
+        var failed = results.Count(item =>
+            item.Rating is null &&
+            PhotoImportStatus.IsImported(item.Photo.ImportStatus) &&
+            item.Job?.Status == "failed");
+        var unrated = results.Count(item =>
+            item.Rating is null &&
+            PhotoImportStatus.IsImported(item.Photo.ImportStatus) &&
+            item.Job?.Status != "failed");
         var keep = CountCategory(rated, "keep");
         var maybe = CountCategory(rated, "maybe");
         var reject = CountCategory(rated, "reject");
@@ -1204,7 +1226,7 @@ public static partial class CliApp
         return new ResultsJson(
             project is null ? "all" : "project",
             ToProjectScopeJson(project),
-            new ResultsSummaryJson(results.Length, rated.Length, unrated, failed, keep, maybe, reject),
+            new ResultsSummaryJson(results.Length, rated.Length, unrated, failed, changed, missing, keep, maybe, reject),
             orderedTop,
             orderedAll);
     }
@@ -1216,6 +1238,8 @@ public static partial class CliApp
         output.WriteLine($"rated: {results.Summary.Rated}");
         output.WriteLine($"unrated: {results.Summary.Unrated}");
         output.WriteLine($"failed: {results.Summary.Failed}");
+        output.WriteLine($"changed: {results.Summary.Changed}");
+        output.WriteLine($"missing: {results.Summary.Missing}");
         output.WriteLine($"keep: {results.Summary.Keep}");
         output.WriteLine($"maybe: {results.Summary.Maybe}");
         output.WriteLine($"reject: {results.Summary.Reject}");
@@ -1280,7 +1304,7 @@ public static partial class CliApp
 
         var options = SequenceGroupingOptions.Default;
         var groups = FilenameSequenceGrouper
-            .Group(database.ListPhotos(project.Id), options)
+            .Group(database.ListPhotos(project.Id).Where(photo => PhotoImportStatus.IsCurrent(photo.ImportStatus)), options)
             .Select(ToPhotoGroupJson)
             .ToArray();
         var payload = new GroupsJson(
@@ -1467,8 +1491,48 @@ public static partial class CliApp
         return results.Count(item => string.Equals(item.Rating?.Category, category, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static PhotoItem[] ListScopePhotos(ProjectDatabase database, PhotoProject? project)
+    {
+        return project is null
+            ? database.ListProjects().SelectMany(item => database.ListPhotos(item.Id)).ToArray()
+            : database.ListPhotos(project.Id).ToArray();
+    }
+
+    private static PhotoRating? GetCurrentRating(ProjectDatabase database, PhotoItem photo)
+    {
+        return PhotoImportStatus.IsImported(photo.ImportStatus)
+            ? database.ListRatings(photo.Id).FirstOrDefault()
+            : null;
+    }
+
     private static PhotoRatingResultJson ToPhotoResultJson(PhotoResult item)
     {
+        if (PhotoImportStatus.IsMissing(item.Photo.ImportStatus))
+        {
+            return new PhotoRatingResultJson(
+                item.Photo.Id,
+                item.Photo.BaseName,
+                null,
+                null,
+                null,
+                null,
+                "missing",
+                null);
+        }
+
+        if (PhotoImportStatus.IsChanged(item.Photo.ImportStatus))
+        {
+            return new PhotoRatingResultJson(
+                item.Photo.Id,
+                item.Photo.BaseName,
+                null,
+                null,
+                null,
+                null,
+                "stale",
+                "Photo changed since its last rating.");
+        }
+
         if (item.Rating is null)
         {
             var status = item.Job?.Status == "failed" ? "failed" : "unrated";
@@ -1559,6 +1623,7 @@ public static partial class CliApp
 
         var photos = database
             .ListPhotos(project.Id)
+            .Where(photo => PhotoImportStatus.IsImported(photo.ImportStatus))
             .Where(photo => string.Equals(
                 database.ListRatings(photo.Id).FirstOrDefault()?.Category,
                 category,
@@ -2160,7 +2225,7 @@ public static partial class CliApp
 
     private static PhotoJson ToPhotoJson(PhotoItem photo, ProjectDatabase database)
     {
-        var latestRating = database.ListRatings(photo.Id).FirstOrDefault();
+        var latestRating = GetCurrentRating(database, photo);
         var userMark = database.GetUserMark(photo.Id);
         return new PhotoJson(
             photo.Id,
@@ -2643,6 +2708,10 @@ public static partial class CliApp
         string Scope,
         ProjectScopeJson? Project,
         JobSummaryJson Jobs,
+        int Photos,
+        int Imported,
+        int Changed,
+        int Missing,
         int Rated);
 
     private sealed record AuthStatusJson(
@@ -2710,6 +2779,8 @@ public static partial class CliApp
         int Rated,
         int Unrated,
         int Failed,
+        int Changed,
+        int Missing,
         int Keep,
         int Maybe,
         int Reject);

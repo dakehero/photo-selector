@@ -51,11 +51,11 @@ public sealed class ProjectDatabaseTests
 
         Assert.Single(projects);
         Assert.Equal(sourceDirectory, projects[0].SourceDirectory);
-        Assert.Equal(2, photos.Count);
+        Assert.Equal(3, photos.Count);
         Assert.Equal("IMG_0001", photos[0].BaseName);
         Assert.NotNull(photos[0].JpegPath);
         Assert.NotNull(photos[0].RawPath);
-        Assert.DoesNotContain(photos, photo => photo.BaseName == "IMG_0002");
+        Assert.Equal("missing", photos.Single(photo => photo.BaseName == "IMG_0002").ImportStatus);
     }
 
     [Fact]
@@ -76,6 +76,86 @@ public sealed class ProjectDatabaseTests
 
         var photo = Assert.Single(database.ListPhotos(projectId));
         Assert.Equal(new DateTimeOffset(2026, 6, 18, 10, 11, 12, TimeSpan.Zero), photo.CaptureTime);
+    }
+
+    [Fact]
+    public void ReplacePhotos_marks_unseen_photos_missing_and_preserves_history()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        var firstJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        var secondJpeg = Path.Combine(sourceDirectory, "IMG_0002.JPG");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+        database.ReplacePhotos(
+            projectId,
+            [
+                new PhotoPair("IMG_0001", firstJpeg, null),
+                new PhotoPair("IMG_0002", secondJpeg, null),
+            ]);
+        var missingPhoto = database.ListPhotos(projectId).Single(photo => photo.BaseName == "IMG_0002");
+        var ratingId = database.SaveRating(missingPhoto.Id, "openrouter", "model-a", "street", 8.4, "keep", "[]", "Strong keeper.");
+        database.SaveRatingAuditLog(missingPhoto.Id, ratingId, "openrouter", "model-a", "prompt", "{}", "{}", "{}", 200, null);
+        database.SaveUserMark(missingPhoto.Id, "keep", 5, "portfolio candidate");
+
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", firstJpeg, null)]);
+
+        var photos = database.ListPhotos(projectId);
+        var retainedMissingPhoto = photos.Single(photo => photo.BaseName == "IMG_0002");
+        Assert.Equal("missing", retainedMissingPhoto.ImportStatus);
+        Assert.Single(database.ListRatings(retainedMissingPhoto.Id));
+        Assert.Single(database.ListRatingAuditLogs(retainedMissingPhoto.Id));
+        Assert.NotNull(database.GetUserMark(retainedMissingPhoto.Id));
+    }
+
+    [Fact]
+    public void ReplacePhotos_restores_missing_photo_to_imported_when_it_reappears_unchanged()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllText(jpegPath, "jpeg");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+        database.ReplacePhotos(projectId, []);
+
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+
+        var photo = Assert.Single(database.ListPhotos(projectId));
+        Assert.Equal("imported", photo.ImportStatus);
+    }
+
+    [Fact]
+    public void ReplacePhotos_restores_missing_photo_as_changed_when_it_reappears_with_new_fingerprint()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var jpegPath = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        File.WriteAllText(jpegPath, "before");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+        database.ReplacePhotos(projectId, []);
+        File.WriteAllText(jpegPath, "after");
+        File.SetLastWriteTimeUtc(jpegPath, DateTime.UtcNow.AddMinutes(5));
+
+        database.ReplacePhotos(projectId, [new PhotoPair("IMG_0001", jpegPath, null)]);
+
+        var photo = Assert.Single(database.ListPhotos(projectId));
+        Assert.Equal("changed", photo.ImportStatus);
+        Assert.Single(database.ListPendingRatingJobs(projectId));
     }
 
     [Fact]

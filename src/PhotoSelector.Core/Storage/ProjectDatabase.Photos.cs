@@ -41,7 +41,7 @@ public sealed partial class ProjectDatabase
                     JpegPath = pair.JpegPath,
                     RawPath = pair.RawPath,
                     CaptureTime = FormatNullableTimestamp(captureTime),
-                    ImportStatus = "imported",
+                    ImportStatus = PhotoImportStatus.Imported,
                     JpegSize = jpegFingerprint.Size,
                     JpegModifiedAt = jpegFingerprint.ModifiedAt,
                     RawSize = rawFingerprint.Size,
@@ -69,7 +69,7 @@ public sealed partial class ProjectDatabase
                 .Set(photo => photo.JpegPath, pair.JpegPath)
                 .Set(photo => photo.RawPath, pair.RawPath)
                 .Set(photo => photo.CaptureTime, FormatNullableTimestamp(captureTime))
-                .Set(photo => photo.ImportStatus, changed ? "changed" : "imported")
+                .Set(photo => photo.ImportStatus, changed ? PhotoImportStatus.Changed : PhotoImportStatus.Imported)
                 .Set(photo => photo.JpegSize, jpegFingerprint.Size)
                 .Set(photo => photo.JpegModifiedAt, jpegFingerprint.ModifiedAt)
                 .Set(photo => photo.RawSize, rawFingerprint.Size)
@@ -91,7 +91,10 @@ public sealed partial class ProjectDatabase
 
         foreach (var stalePhotoId in stalePhotoIds)
         {
-            DeletePhotoCascade(stalePhotoId);
+            Photos
+                .Where(photo => photo.Id == stalePhotoId)
+                .Set(photo => photo.ImportStatus, PhotoImportStatus.Missing)
+                .Update();
         }
 
         transaction.Commit();
@@ -115,14 +118,12 @@ public sealed partial class ProjectDatabase
         return photo is null ? null : ToPhoto(photo);
     }
 
-    private void DeletePhotoCascade(long photoId)
+    public void MarkPhotoImported(long photoId)
     {
-        UserMarks.Where(mark => mark.PhotoId == photoId).Delete();
-        RatingAuditLogs.Where(log => log.PhotoId == photoId).Delete();
-        Ratings.Where(rating => rating.PhotoId == photoId).Delete();
-        RatingJobs.Where(job => job.PhotoId == photoId).Delete();
-        ArenaRatings.Where(rating => rating.PhotoId == photoId).Delete();
-        Photos.Where(photo => photo.Id == photoId).Delete();
+        Photos
+            .Where(photo => photo.Id == photoId)
+            .Set(photo => photo.ImportStatus, PhotoImportStatus.Imported)
+            .Update();
     }
 
     private static PhotoItem ToPhoto(PhotoRow row)

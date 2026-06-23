@@ -126,6 +126,35 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Groups_json_ignores_photos_marked_missing_after_rescan()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var firstJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        var secondJpeg = Path.Combine(sourceDirectory, "IMG_0002.JPG");
+        File.WriteAllText(firstJpeg, "jpeg");
+        File.WriteAllText(secondJpeg, "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+        File.Delete(secondJpeg);
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        var photosOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["photos", "list", "--project", "1", "--json"], photosOutput, TextWriter.Null));
+        using var photosDocument = JsonDocument.Parse(photosOutput.ToString());
+        var missingPhoto = photosDocument.RootElement.GetProperty("photos").EnumerateArray().Single(photo => photo.GetProperty("baseName").GetString() == "IMG_0002");
+        Assert.Equal("missing", missingPhoto.GetProperty("importStatus").GetString());
+
+        var groupsOutput = new StringWriter();
+        Assert.Equal(0, CliApp.Run(["groups", sourceDirectory, "--json"], groupsOutput, TextWriter.Null));
+        using var groupsDocument = JsonDocument.Parse(groupsOutput.ToString());
+        Assert.Empty(groupsDocument.RootElement.GetProperty("groups").EnumerateArray());
+    }
+
+    [Fact]
     public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();

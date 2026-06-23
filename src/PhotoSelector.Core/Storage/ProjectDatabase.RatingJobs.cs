@@ -11,6 +11,11 @@ public sealed partial class ProjectDatabase
         var enqueued = 0;
         foreach (var photo in ListPhotos(projectId))
         {
+            if (PhotoImportStatus.IsMissing(photo.ImportStatus))
+            {
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(photo.JpegPath))
             {
                 continue;
