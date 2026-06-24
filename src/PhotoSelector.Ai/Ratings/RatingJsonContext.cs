@@ -5,9 +5,38 @@ namespace PhotoSelector.Ai.Ratings;
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(AiRatingCriterion[]))]
+[JsonSerializable(typeof(AiRatingResponseJson))]
+[JsonSerializable(typeof(ChatCompletionsResponseJson))]
 [JsonSerializable(typeof(ChatCompletionsRequestJson))]
 [JsonSerializable(typeof(RedactedRatingRequestJson))]
 public sealed partial class RatingJsonContext : JsonSerializerContext;
+
+public sealed record AiRatingResponseJson(
+    [property: JsonPropertyName("photo_type")] string? PhotoType,
+    RatingScore? Score,
+    string? Category,
+    AiRatingCriterionResponseJson[]? Criteria,
+    string? Reason);
+
+public sealed record AiRatingCriterionResponseJson(
+    string? Name,
+    RatingScore? Score,
+    string? Comment);
+
+[JsonConverter(typeof(RatingScoreJsonConverter))]
+public readonly record struct RatingScore(double Value, string RawText);
+
+public sealed record ChatCompletionsResponseJson(
+    ChatCompletionChoiceJson[]? Choices);
+
+public sealed record ChatCompletionChoiceJson(
+    ChatCompletionResponseMessageJson? Message);
+
+public sealed record ChatCompletionResponseMessageJson(
+    ChatCompletionMessageContentJson Content);
+
+[JsonConverter(typeof(ChatCompletionMessageContentJsonConverter))]
+public readonly record struct ChatCompletionMessageContentJson(string? Text);
 
 public sealed record ChatCompletionsRequestJson(
     string Model,

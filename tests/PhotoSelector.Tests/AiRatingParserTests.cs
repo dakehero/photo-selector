@@ -5,6 +5,35 @@ namespace PhotoSelector.Tests;
 public sealed class AiRatingParserTests
 {
     [Fact]
+    public void Ai_rating_json_contracts_use_serializer_dtos_instead_of_hand_written_json_field_walks()
+    {
+        var ratingsDirectory = FindRepositoryDirectory("src/PhotoSelector.Ai/Ratings");
+        var allowedRawShapeConverter = Path.Combine(ratingsDirectory, "ChatCompletionMessageContentJsonConverter.cs");
+        var disallowedPatterns = new[]
+        {
+            "TryGetProperty",
+            "GetProperty",
+            "EnumerateArray",
+            "JsonDocument.Parse(",
+            ".GetRawText()",
+        };
+
+        foreach (var sourcePath in Directory.EnumerateFiles(ratingsDirectory, "*.cs"))
+        {
+            if (string.Equals(sourcePath, allowedRawShapeConverter, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var source = File.ReadAllText(sourcePath);
+            foreach (var pattern in disallowedPatterns)
+            {
+                Assert.DoesNotContain(pattern, source, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
     public void Parse_reads_type_score_category_criteria_and_reason_from_valid_json()
     {
         var result = AiRatingParser.Parse(
@@ -32,6 +61,30 @@ public sealed class AiRatingParserTests
         Assert.Equal(7.3, result.Rating.Criteria[0].Score);
         Assert.Equal("Strong atmosphere.", result.Rating.Criteria[0].Comment);
         Assert.Null(result.Error);
+    }
+
+    [Fact]
+    public void Parse_accepts_numeric_strings_with_one_decimal_place()
+    {
+        var result = AiRatingParser.Parse(
+            """
+            {
+              "photo_type": "architecture",
+              "score": "6.5",
+              "category": "maybe",
+              "criteria": [
+                {"name": "impact", "score": "6.0", "comment": "Clear subject."},
+                {"name": "composition", "score": "6.5", "comment": "Stable framing."}
+              ],
+              "reason": "Usable reference frame."
+            }
+            """);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Rating);
+        Assert.Equal(6.5, result.Rating.Score);
+        Assert.Equal(6.0, result.Rating.Criteria[0].Score);
+        Assert.Equal(6.5, result.Rating.Criteria[1].Score);
     }
 
     [Theory]
@@ -154,7 +207,27 @@ public sealed class AiRatingParserTests
     public void Parse_fails_when_score_is_not_a_number()
     {
         var result = AiRatingParser.Parse(
-            """{"photo_type":"landscape","score":"4","category":"keep","criteria":[],"reason":"sharp"}""");
+            """{"photo_type":"landscape","score":"high","category":"keep","criteria":[],"reason":"sharp"}""");
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Rating);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    [Theory]
+    [InlineData("8")]
+    [InlineData("8.25")]
+    public void Parse_fails_when_numeric_string_score_does_not_have_exactly_one_decimal_place(string score)
+    {
+        var result = AiRatingParser.Parse($$"""
+            {
+              "photo_type": "landscape",
+              "score": "{{score}}",
+              "category": "keep",
+              "criteria": [{"name": "impact", "score": "7.3", "comment": "Strong atmosphere."}],
+              "reason": "sharp subject"
+            }
+            """);
 
         Assert.False(result.IsSuccess);
         Assert.Null(result.Rating);
@@ -201,5 +274,22 @@ public sealed class AiRatingParserTests
         Assert.False(result.IsSuccess);
         Assert.Null(result.Rating);
         Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    private static string FindRepositoryDirectory(string relativePath)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath);
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException($"Could not find repository directory: {relativePath}");
     }
 }

@@ -1,6 +1,5 @@
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
 
 namespace PhotoSelector.Ai.Ratings;
 
@@ -55,8 +54,8 @@ public sealed class OpenAiCompatibleRatingClient : IPhotoRatingClient, IDisposab
                 new AiRatingAudit(request.Prompt, requestJsonRedacted, string.Empty, responseBody, (int)response.StatusCode, error));
         }
 
-        var messageContent = ExtractMessageContent(responseBody);
-        var ratingJson = ExtractJsonObject(messageContent);
+        var messageContent = ChatCompletionResponseParser.ExtractMessageContent(responseBody);
+        var ratingJson = ChatCompletionResponseParser.ExtractJsonObject(messageContent);
         var parseResult = AiRatingParser.Parse(ratingJson);
         if (!parseResult.IsSuccess || parseResult.Rating is null)
         {
@@ -82,52 +81,6 @@ public sealed class OpenAiCompatibleRatingClient : IPhotoRatingClient, IDisposab
         {
             httpClient.Dispose();
         }
-    }
-
-    private static string ExtractMessageContent(string responseBody)
-    {
-        using var document = JsonDocument.Parse(responseBody);
-        var choices = document.RootElement.GetProperty("choices");
-        if (choices.GetArrayLength() == 0)
-        {
-            throw new InvalidOperationException("AI response did not include choices.");
-        }
-
-        var content = choices[0].GetProperty("message").GetProperty("content");
-        if (content.ValueKind == JsonValueKind.String)
-        {
-            return content.GetString() ?? string.Empty;
-        }
-
-        return content.GetRawText();
-    }
-
-    private static string ExtractJsonObject(string content)
-    {
-        var trimmed = content.Trim();
-        if (trimmed.StartsWith("```", StringComparison.Ordinal))
-        {
-            var firstNewLine = trimmed.IndexOf("\n", StringComparison.Ordinal);
-            var lastFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
-            if (firstNewLine >= 0 && lastFence > firstNewLine)
-            {
-                trimmed = trimmed[(firstNewLine + 1)..lastFence].Trim();
-            }
-        }
-
-        if (trimmed.StartsWith('{') && trimmed.EndsWith('}'))
-        {
-            return trimmed;
-        }
-
-        var start = trimmed.IndexOf('{');
-        var end = trimmed.LastIndexOf('}');
-        if (start >= 0 && end > start)
-        {
-            return trimmed[start..(end + 1)];
-        }
-
-        return trimmed;
     }
 
 }

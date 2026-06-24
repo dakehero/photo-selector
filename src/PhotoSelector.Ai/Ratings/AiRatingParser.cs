@@ -15,122 +15,10 @@ public static class AiRatingParser
 
     public static AiRatingParseResult Parse(string json)
     {
+        AiRatingResponseJson? response;
         try
         {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                return Failure("AI rating JSON root must be an object.");
-            }
-
-            if (!root.TryGetProperty("photo_type", out var photoTypeElement) ||
-                !root.TryGetProperty("score", out var scoreElement) ||
-                !root.TryGetProperty("category", out var categoryElement) ||
-                !root.TryGetProperty("criteria", out var criteriaElement) ||
-                !root.TryGetProperty("reason", out var reasonElement))
-            {
-                return Failure("AI rating JSON must include photo_type, score, category, criteria, and reason.");
-            }
-
-            if (photoTypeElement.ValueKind != JsonValueKind.String)
-            {
-                return Failure("Photo type must be a string.");
-            }
-
-            var photoType = photoTypeElement.GetString();
-            if (string.IsNullOrWhiteSpace(photoType))
-            {
-                return Failure("Photo type must not be empty.");
-            }
-
-            if (scoreElement.ValueKind != JsonValueKind.Number)
-            {
-                return Failure("Score must be a number.");
-            }
-
-            if (!TryGetOneDecimalScore(scoreElement, out var score))
-            {
-                return Failure("Score must be a number with at most one decimal place.");
-            }
-
-            if (score is < 1 or > 10)
-            {
-                return Failure("Score must be between 1 and 10.");
-            }
-
-            if (categoryElement.ValueKind != JsonValueKind.String)
-            {
-                return Failure("Category must be a string.");
-            }
-
-            var category = categoryElement.GetString();
-            if (category is null || !ValidCategories.Contains(category))
-            {
-                return Failure("Category must be one of keep, maybe, or reject.");
-            }
-
-            if (!IsCategoryConsistentWithScore(score, category))
-            {
-                return Failure("Category must match the score: keep 8-10, maybe 5-7, reject 1-4.");
-            }
-
-            if (reasonElement.ValueKind != JsonValueKind.String)
-            {
-                return Failure("Reason must be a string.");
-            }
-
-            if (criteriaElement.ValueKind != JsonValueKind.Array)
-            {
-                return Failure("Criteria must be an array.");
-            }
-
-            var criteria = new List<AiRatingCriterion>();
-            foreach (var item in criteriaElement.EnumerateArray())
-            {
-                if (item.ValueKind != JsonValueKind.Object)
-                {
-                    return Failure("Each criterion must be an object.");
-                }
-
-                if (!item.TryGetProperty("name", out var nameElement) ||
-                    !item.TryGetProperty("score", out var criterionScoreElement) ||
-                    !item.TryGetProperty("comment", out var commentElement))
-                {
-                    return Failure("Each criterion must include name, score, and comment.");
-                }
-
-                if (nameElement.ValueKind != JsonValueKind.String ||
-                    criterionScoreElement.ValueKind != JsonValueKind.Number ||
-                    commentElement.ValueKind != JsonValueKind.String)
-                {
-                    return Failure("Criterion name/comment must be strings and score must be a number.");
-                }
-
-            if (!TryGetOneDecimalScore(criterionScoreElement, out var criterionScore))
-            {
-                return Failure("Criterion score must be a number with at most one decimal place.");
-            }
-
-                if (criterionScore is < 1 or > 10)
-                {
-                    return Failure("Criterion score must be between 1 and 10.");
-                }
-
-                var name = nameElement.GetString();
-                if (string.IsNullOrWhiteSpace(name))
-                {
-                    return Failure("Criterion name must not be empty.");
-                }
-
-                criteria.Add(new AiRatingCriterion(name, criterionScore, commentElement.GetString() ?? string.Empty));
-            }
-
-            return new AiRatingParseResult(
-                true,
-                new AiRating(photoType, score, category, criteria, reasonElement.GetString() ?? string.Empty),
-                null);
+            response = JsonSerializer.Deserialize(json, RatingJsonContext.Default.AiRatingResponseJson);
         }
         catch (JsonException)
         {
@@ -140,6 +28,72 @@ public static class AiRatingParser
         {
             return Failure("AI rating JSON is malformed.");
         }
+
+        if (response is null)
+        {
+            return Failure("AI rating JSON root must be an object.");
+        }
+
+        if (response is not
+            {
+                PhotoType: { } photoType,
+                Score: { } scoreDto,
+                Category: { } category,
+                Criteria: { } criteriaItems,
+                Reason: { } reason,
+            })
+        {
+            return Failure("AI rating JSON must include photo_type, score, category, criteria, and reason.");
+        }
+
+        if (string.IsNullOrWhiteSpace(photoType))
+        {
+            return Failure("Photo type must not be empty.");
+        }
+
+        var scoreResult = ValidateScore(scoreDto, "Score");
+        if (!scoreResult.IsSuccess)
+        {
+            return Failure(scoreResult.Error!);
+        }
+
+        var score = scoreResult.Score;
+        if (!ValidCategories.Contains(category))
+        {
+            return Failure("Category must be one of keep, maybe, or reject.");
+        }
+
+        if (!IsCategoryConsistentWithScore(score, category))
+        {
+            return Failure("Category must match the score: keep 8-10, maybe 5-7, reject 1-4.");
+        }
+
+        var criteria = new List<AiRatingCriterion>();
+        foreach (var item in criteriaItems)
+        {
+            if (item.Name is null || item.Score is null || item.Comment is null)
+            {
+                return Failure("Each criterion must include name, score, and comment.");
+            }
+
+            if (string.IsNullOrWhiteSpace(item.Name))
+            {
+                return Failure("Criterion name must not be empty.");
+            }
+
+            var criterionScoreResult = ValidateScore(item.Score.Value, "Criterion score");
+            if (!criterionScoreResult.IsSuccess)
+            {
+                return Failure(criterionScoreResult.Error!);
+            }
+
+            criteria.Add(new AiRatingCriterion(item.Name, criterionScoreResult.Score, item.Comment));
+        }
+
+        return new AiRatingParseResult(
+            true,
+            new AiRating(photoType, score, category, criteria, reason),
+            null);
     }
 
     private static AiRatingParseResult Failure(string error) => new(false, null, error);
@@ -155,28 +109,32 @@ public static class AiRatingParser
         };
     }
 
-    private static bool TryGetOneDecimalScore(JsonElement element, out double score)
+    private static ScoreValidationResult ValidateScore(RatingScore score, string label)
     {
-        score = 0;
-        var rawText = element.GetRawText();
-        var decimalSeparator = rawText.IndexOf('.', StringComparison.Ordinal);
-        if (decimalSeparator < 0 || rawText.Length - decimalSeparator - 1 != 1)
+        if (!HasExactlyOneDecimalPlace(score.RawText))
         {
-            return false;
+            return new ScoreValidationResult(false, 0, $"{label} must be a number with exactly one decimal place.");
         }
 
-        if (!element.TryGetDouble(out var value))
+        if (score.Value is < 1 or > 10)
         {
-            return false;
+            return new ScoreValidationResult(false, 0, $"{label} must be between 1 and 10.");
         }
 
-        var scaled = value * 10;
+        var scaled = score.Value * 10;
         if (Math.Abs(scaled - Math.Round(scaled)) > 0.000001)
         {
-            return false;
+            return new ScoreValidationResult(false, 0, $"{label} must be a number with exactly one decimal place.");
         }
 
-        score = Math.Round(value, 1);
-        return true;
+        return new ScoreValidationResult(true, Math.Round(score.Value, 1), null);
     }
+
+    private static bool HasExactlyOneDecimalPlace(string rawText)
+    {
+        var decimalSeparator = rawText.IndexOf('.', StringComparison.Ordinal);
+        return decimalSeparator >= 0 && rawText.Length - decimalSeparator - 1 == 1;
+    }
+
+    private sealed record ScoreValidationResult(bool IsSuccess, double Score, string? Error);
 }

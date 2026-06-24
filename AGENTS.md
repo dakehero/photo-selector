@@ -124,6 +124,7 @@ Worker implementation detail:
 - Prefer mature library types and parsers for external standards, binary formats, model runtimes, tensors, image metadata, EXIF/TIFF/IPTC/XMP, perceptual hashes, and embeddings. Hand-write Photo Selector domain records only when they represent product concepts or stable internal contracts.
 - Keep third-party library types behind adapters when exposing them would leak implementation details into Core, CLI, future GUI, or agent contracts.
 - Before hand-writing a parser or data model for a known standard, check whether an existing project dependency or a well-supported cross-platform library already provides it. If a new production dependency is needed, ask first and document why the adapter boundary is worth it.
+- For JSON contracts, define DTOs and use `System.Text.Json` source-generated serializers/converters for parsing. Keep hand-written code focused on validation and domain mapping; do not manually walk JSON fields with `JsonDocument` unless preserving raw JSON shape is the actual requirement.
 - Run `dotnet test` before claiming completion.
 
 ## Planning Rules
