@@ -155,6 +155,64 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Review_group_json_saves_snapshot_for_computed_group()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        var firstJpeg = Path.Combine(sourceDirectory, "IMG_0001.JPG");
+        var secondJpeg = Path.Combine(sourceDirectory, "IMG_0002.JPG");
+        File.WriteAllText(firstJpeg, "jpeg");
+        File.WriteAllText(secondJpeg, "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(
+            [
+                "review",
+                "group",
+                sourceDirectory,
+                "filename-sequence:IMG_:0001-0002",
+                "--winner",
+                "IMG_0002",
+                "--reason",
+                "Sharper expression.",
+                "--json",
+            ],
+            output,
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var reviewJson = document.RootElement.GetProperty("review");
+        var reviewId = reviewJson.GetProperty("id").GetInt64();
+        Assert.Equal("filename-sequence:IMG_:0001-0002", reviewJson.GetProperty("groupId").GetString());
+        Assert.Equal("IMG_0002", reviewJson.GetProperty("winnerBaseName").GetString());
+        Assert.Equal("Sharper expression.", reviewJson.GetProperty("reason").GetString());
+        Assert.Equal(["IMG_0001", "IMG_0002"], reviewJson.GetProperty("items").EnumerateArray().Select(item => item.GetProperty("baseName").GetString() ?? string.Empty).ToArray());
+
+        File.Delete(firstJpeg);
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        database.Migrate();
+        var project = Assert.Single(database.ListProjects());
+        var review = Assert.Single(database.ListGroupReviews(project.Id));
+        Assert.Equal(reviewId, review.Id);
+        Assert.Equal("manual", review.Provider);
+        Assert.Equal("manual", review.Model);
+        Assert.Equal("IMG_0002", review.WinnerBaseName);
+        var items = database.ListGroupReviewItems(review.Id);
+        Assert.Equal(["IMG_0001", "IMG_0002"], items.Select(item => item.BaseName).ToArray());
+        Assert.Equal(["imported", "imported"], items.Select(item => item.ImportStatus).ToArray());
+    }
+
+    [Fact]
     public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();

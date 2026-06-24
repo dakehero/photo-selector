@@ -32,6 +32,10 @@ public sealed partial class ProjectDatabase : IDisposable
 
     private ITable<UserMarkRow> UserMarks => database.GetTable<UserMarkRow>();
 
+    private ITable<GroupReviewRow> GroupReviews => database.GetTable<GroupReviewRow>();
+
+    private ITable<GroupReviewItemRow> GroupReviewItems => database.GetTable<GroupReviewItemRow>();
+
     public static ProjectDatabase Open(string databasePath)
     {
         var directory = Path.GetDirectoryName(databasePath);

@@ -36,6 +36,14 @@ public sealed partial class ProjectDatabase
         }
     }
 
+    private void EnsureGroupReviewExists(long groupReviewId)
+    {
+        if (!GroupReviews.Any(review => review.Id == groupReviewId))
+        {
+            ThrowSqliteForeignKey();
+        }
+    }
+
     private static void ThrowSqliteForeignKey()
     {
         throw new SqliteException("SQLite Error 19: 'FOREIGN KEY constraint failed'.", 19, 787);

@@ -17,6 +17,8 @@ public sealed partial class ProjectDatabase
         database.CreateTable<ArenaRunRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<ArenaRatingRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<UserMarkRow>(tableOptions: TableOptions.CreateIfNotExists);
+        database.CreateTable<GroupReviewRow>(tableOptions: TableOptions.CreateIfNotExists);
+        database.CreateTable<GroupReviewItemRow>(tableOptions: TableOptions.CreateIfNotExists);
 
         if (!SchemaVersions.Any(row => row.Id == 1))
         {

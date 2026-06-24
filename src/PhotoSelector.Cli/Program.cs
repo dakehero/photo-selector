@@ -94,6 +94,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(BuildResultsCommand(output, error));
         root.Subcommands.Add(BuildGroupsCommand(output, error));
+        root.Subcommands.Add(BuildReviewCommand(output, error));
         root.Subcommands.Add(BuildMarkCommand(output, error));
         root.Subcommands.Add(BuildExportCommand(output, error));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
@@ -1319,6 +1320,128 @@ public static partial class CliApp
         return 0;
     }
 
+    private static Command BuildReviewCommand(TextWriter output, TextWriter error)
+    {
+        var command = new Command("review", "Review derived shoot structures such as sequence groups.");
+        command.Subcommands.Add(BuildReviewGroupCommand(output, error));
+        return command;
+    }
+
+    private static Command BuildReviewGroupCommand(TextWriter output, TextWriter error)
+    {
+        var command = new Command("group", "Save a manual review snapshot for one computed sequence group.");
+        var directoryArgument = new Argument<string>("directory");
+        var groupIdArgument = new Argument<string>("group-id");
+        var winnerOption = new Option<string>("--winner")
+        {
+            Required = true,
+        };
+        var reasonOption = new Option<string>("--reason")
+        {
+            Required = true,
+        };
+        var jsonOption = new Option<bool>("--json");
+        command.Arguments.Add(directoryArgument);
+        command.Arguments.Add(groupIdArgument);
+        command.Options.Add(winnerOption);
+        command.Options.Add(reasonOption);
+        command.Options.Add(jsonOption);
+        command.SetAction(parseResult =>
+            RunReviewGroup(
+                parseResult.GetRequiredValue(directoryArgument),
+                parseResult.GetRequiredValue(groupIdArgument),
+                parseResult.GetRequiredValue(winnerOption),
+                parseResult.GetRequiredValue(reasonOption),
+                parseResult.GetValue(jsonOption),
+                output,
+                error));
+        return command;
+    }
+
+    private static int RunReviewGroup(
+        string directory,
+        string groupId,
+        string winnerSelector,
+        string reason,
+        bool json,
+        TextWriter output,
+        TextWriter error)
+    {
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, directory);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {directory}");
+            return 1;
+        }
+
+        var photos = database.ListPhotos(project.Id)
+            .Where(photo => PhotoImportStatus.IsCurrent(photo.ImportStatus))
+            .ToArray();
+        var photosById = photos.ToDictionary(photo => photo.Id);
+        var group = FilenameSequenceGrouper
+            .Group(photos, SequenceGroupingOptions.Default)
+            .FirstOrDefault(item => string.Equals(item.Id, groupId, StringComparison.OrdinalIgnoreCase));
+        if (group is null)
+        {
+            error.WriteLine($"Group not found: {groupId}");
+            return 1;
+        }
+
+        var winner = FindGroupWinner(group, photosById, winnerSelector);
+        if (winner is null)
+        {
+            error.WriteLine($"Winner photo not found in group: {winnerSelector}");
+            return 1;
+        }
+
+        var snapshots = group.Items
+            .OrderBy(item => item.Order)
+            .Select(item =>
+            {
+                var photo = photosById[item.PhotoId];
+                return new GroupReviewItemSnapshot(
+                    photo.Id,
+                    photo.BaseName,
+                    photo.JpegPath,
+                    photo.RawPath,
+                    photo.CaptureTime,
+                    photo.ImportStatus,
+                    photo.JpegSize,
+                    photo.JpegModifiedAt,
+                    photo.RawSize,
+                    photo.RawModifiedAt,
+                    item.Order,
+                    item.SequenceNumber);
+            })
+            .ToArray();
+        var reviewId = database.SaveGroupReview(
+            project.Id,
+            group.Id,
+            group.Type,
+            group.Key,
+            group.Reason,
+            winner.Id,
+            winner.BaseName,
+            reason,
+            "manual",
+            "manual",
+            string.Empty,
+            snapshots);
+        var review = database.ListGroupReviews(project.Id).Single(item => item.Id == reviewId);
+        var items = database.ListGroupReviewItems(reviewId);
+
+        if (json)
+        {
+            var payload = new ReviewGroupJson(ToProjectScopeJson(project)!, ToSavedGroupReviewJson(review, items));
+            output.WriteLine(JsonSerializer.Serialize(payload, CliJsonContext.Default.ReviewGroupJson));
+            return 0;
+        }
+
+        output.WriteLine($"Saved group review {review.Id}: {review.WinnerBaseName}");
+        return 0;
+    }
+
     private static void WriteArenaSummary(ProjectDatabase database, long arenaRunId, TextWriter output)
     {
         var ratings = database.ListArenaRatings(arenaRunId);
@@ -2208,6 +2331,59 @@ public static partial class CliApp
                 .ToArray());
     }
 
+    private static PhotoItem? FindGroupWinner(
+        PhotoGroup group,
+        IReadOnlyDictionary<long, PhotoItem> photosById,
+        string winnerSelector)
+    {
+        if (long.TryParse(winnerSelector, NumberStyles.Integer, CultureInfo.InvariantCulture, out var photoId))
+        {
+            return group.Items.Any(item => item.PhotoId == photoId) && photosById.TryGetValue(photoId, out var photo)
+                ? photo
+                : null;
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(winnerSelector);
+        var matches = group.Items
+            .Where(item => string.Equals(item.BaseName, baseName, StringComparison.OrdinalIgnoreCase))
+            .Select(item => photosById.TryGetValue(item.PhotoId, out var photo) ? photo : null)
+            .Where(photo => photo is not null)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static SavedGroupReviewJson ToSavedGroupReviewJson(
+        GroupReview review,
+        IReadOnlyList<GroupReviewItem> items)
+    {
+        return new SavedGroupReviewJson(
+            review.Id,
+            review.ProjectId,
+            review.GroupId,
+            review.GroupType,
+            review.GroupKey,
+            review.GroupReason,
+            review.WinnerPhotoId,
+            review.WinnerBaseName,
+            review.Reason,
+            review.Provider,
+            review.Model,
+            review.Prompt,
+            review.CreatedAt,
+            items
+                .Select(item => new SavedGroupReviewItemJson(
+                    item.Id,
+                    item.PhotoId,
+                    item.BaseName,
+                    item.JpegPath,
+                    item.RawPath,
+                    item.CaptureTime,
+                    item.ImportStatus,
+                    item.Order,
+                    item.SequenceNumber))
+                .ToArray());
+    }
+
     private static JobSummaryJson ToJobSummaryJson(RatingJobSummary summary)
     {
         return new JobSummaryJson(summary.Total, summary.Pending, summary.Completed, summary.Failed);
@@ -2415,6 +2591,21 @@ public static partial class CliApp
             new HelpOutputJson(false, true, "Derived sequence groups."),
             ["photo-selector groups \"C:\\Photos\\Shoot\" --json"]),
         new(
+            "review group",
+            "photo-selector review group <directory> <group-id> --winner <photo-id|base-name> --reason <text> [--json]",
+            "Save a review snapshot for one computed sequence group.",
+            [
+                new HelpArgumentJson("directory", true, "path", "directory", "Indexed project directory."),
+                new HelpArgumentJson("group-id", true, "string", "id", "Group id from photo-selector groups."),
+            ],
+            [
+                new HelpOptionJson("--winner", "string", true, [], "Winning photo id or base name within the group."),
+                new HelpOptionJson("--reason", "string", true, [], "Review note explaining the winner."),
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Saved group review snapshot."),
+            ["photo-selector review group \"C:\\Photos\\Shoot\" filename-sequence:IMG_:0001-0002 --winner IMG_0002 --reason \"Sharper expression\" --json"]),
+        new(
             "mark",
             "photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]",
             "Save a manual decision, star rating, and note for one catalog photo.",
@@ -2591,6 +2782,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(ResultsJson))]
     [JsonSerializable(typeof(ResultsPhotoJson))]
     [JsonSerializable(typeof(GroupsJson))]
+    [JsonSerializable(typeof(ReviewGroupJson))]
     [JsonSerializable(typeof(MarkJson))]
     [JsonSerializable(typeof(StatusJson))]
     [JsonSerializable(typeof(ArenaListJson))]
@@ -2696,6 +2888,37 @@ public static partial class CliApp
     private sealed record PhotoGroupItemJson(
         long PhotoId,
         string BaseName,
+        int Order,
+        long SequenceNumber);
+
+    private sealed record ReviewGroupJson(
+        ProjectScopeJson Project,
+        SavedGroupReviewJson Review);
+
+    private sealed record SavedGroupReviewJson(
+        long Id,
+        long ProjectId,
+        string GroupId,
+        string GroupType,
+        string GroupKey,
+        string GroupReason,
+        long WinnerPhotoId,
+        string WinnerBaseName,
+        string Reason,
+        string Provider,
+        string Model,
+        string Prompt,
+        DateTimeOffset CreatedAt,
+        SavedGroupReviewItemJson[] Items);
+
+    private sealed record SavedGroupReviewItemJson(
+        long Id,
+        long PhotoId,
+        string BaseName,
+        string? JpegPath,
+        string? RawPath,
+        DateTimeOffset? CaptureTime,
+        string ImportStatus,
         int Order,
         long SequenceNumber);
 
