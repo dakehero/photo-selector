@@ -49,6 +49,17 @@ Near-term product direction:
 - Do not store raw image data, API keys, or unredacted requests in persistent logs.
 - GUI work is currently待实现. When a GUI returns, it may use mock/demo data while provisional, but production workflows must come from shared services.
 
+## Development Loop Guardrails
+
+- Before starting a roadmap slice, state the current goal in one sentence and name what is explicitly out of scope for that slice.
+- Treat broad architecture changes, production dependencies, storage schema changes, provider selection changes, model-runtime changes, and new AI framework experiments as scope expansions. Do not slip them into a roadmap slice without calling them out first.
+- Work in small, reviewable slices with a concrete acceptance check. Prefer one behavior, one command, one storage contract, or one provider path at a time.
+- Keep an issue ledger while developing: current problem, known risks, non-goals, and acceptance criteria. Update it when the slice changes shape.
+- Use red-green-review for behavior changes: write or update a failing test first, implement the smallest passing change, then review the diff against this file before claiming completion.
+- At the end of each slice, run a drift check: confirm the change still serves shoot-level review/culling, does not turn Photo Selector into a generic album manager, and does not move workflow logic into the wrong layer.
+- Stop at stable review points. A stable point means tests pass, the diff is scoped, risks are named, and the next slice is separable.
+- Do not continue an open-ended self-improvement loop without a harness. The harness must include a goal, scope boundaries, automated checks, and an explicit stop condition.
+
 ## AI Provider Rules
 
 - Prefer `IPhotoRatingClient` and `ProviderRatingClientFactory` over one-off API calls.
@@ -121,6 +132,10 @@ Worker implementation detail:
 - Add tests before changing rating behavior or provider behavior.
 - Keep raw audit paths covered by tests, especially secret and image redaction.
 - Prefer small provider-specific adapters over branching deeply inside CLI commands.
+- Do not implement speculative local inference, ONNX, embedding, or AI encoder work until the design is explicit enough to review. Keep these experiments behind provider/backend adapters and separate from core shoot-review workflow.
+- Do not use MVP as an excuse to add future architecture prematurely. Add durable abstractions only when the current slice needs them or an existing pattern already exists.
+- Schema changes must include a migration path for existing SQLite databases and a regression test for that migration. New AI-generated durable data should preserve redacted request data and raw model output when available.
+- NativeAOT compatibility is a product constraint for the CLI. After changes that touch serialization, reflection-sensitive code, storage, provider clients, or command startup, verify with an AOT publish in addition to `dotnet test`.
 - Prefer mature library types and parsers for external standards, binary formats, model runtimes, tensors, image metadata, EXIF/TIFF/IPTC/XMP, perceptual hashes, and embeddings. Hand-write Photo Selector domain records only when they represent product concepts or stable internal contracts.
 - Keep third-party library types behind adapters when exposing them would leak implementation details into Core, CLI, future GUI, or agent contracts.
 - Before hand-writing a parser or data model for a known standard, check whether an existing project dependency or a well-supported cross-platform library already provides it. If a new production dependency is needed, ask first and document why the adapter boundary is worth it.
@@ -130,3 +145,4 @@ Worker implementation detail:
 ## Planning Rules
 
 - Do not create or maintain a root `TODO.md`. Track follow-up work in Superpowers specs and plans under `docs/superpowers/`.
+- Keep `CODEMAP.md` files as coarse navigation aids, not exhaustive inventories. Update them when adding or removing top-level areas, user-facing commands, storage domains, provider surfaces, or major test areas. If a codemap starts duplicating implementation details that change every slice, simplify it instead of expanding it.

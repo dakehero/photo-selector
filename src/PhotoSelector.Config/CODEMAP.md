@@ -16,7 +16,9 @@
 - `ConfigStore.cs`: config load/save behavior.
 - `Secrets/ApiKeyResolver.cs`: resolves `api_key_ref` and `api_key_env`.
 - `Secrets/ISecretStore.cs`: stable credential provider contract, including availability diagnostics.
+- `Secrets/SecretStoreKind.cs`: platform/diagnostic classification for secret providers.
 - `Secrets/SecretStoreFactory.cs`: selects platform or memory providers.
+- `Secrets/CommandSecretStore.cs`: base class for command-backed platform providers.
 - `Secrets/WindowsCredentialSecretStore.cs`: Windows credential manager provider.
 - `Secrets/MacOsKeychainSecretStore.cs`: macOS keychain provider.
 - `Secrets/FreedesktopSecretServiceStore.cs`: Linux secret-service provider.

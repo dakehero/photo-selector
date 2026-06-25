@@ -2,11 +2,11 @@
 
 ## Purpose
 
-`PhotoSelector.Agent` owns shared workflow and worker orchestration above `Core`, `Ai`, and `Config`. CLI, GUI, and future MCP surfaces should call this project instead of duplicating import/rating loops.
+`PhotoSelector.Agent` owns shared workflow and worker orchestration above `Core`, `Ai`, and `Config`. CLI, GUI, and future MCP surfaces should call this project instead of duplicating import, rating, and future review loops.
 
 ## Main Areas
 
-- `Workflows`: user-facing workflow composition such as importing a directory and enqueueing rating work.
+- `Workflows`: product workflow composition such as importing a directory and enqueueing rating work.
 - `Workers`: job processors that execute queued work and write results/audit logs.
 
 ## Important Files
@@ -28,3 +28,4 @@ This project depends on:
 - Keep UI state out of this project.
 - Keep provider-specific HTTP details in `PhotoSelector.Ai`.
 - Keep database schema and durable job tables in `PhotoSelector.Core`.
+- Keep command names, JSON formatting, and human output in presentation layers such as `PhotoSelector.Cli`.

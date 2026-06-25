@@ -6,7 +6,7 @@
 
 ## Important Files
 
-- `Program.cs`: command parsing, command handlers, JSON output models, and orchestration.
+- `Program.cs`: command parsing, command handlers, JSON output models, help schema, and orchestration. Keep it thin; move growing workflow logic into shared services.
 
 ## Current Commands
 
@@ -18,10 +18,12 @@
 - `status` and `reset ratings` expose catalog state and rerating control without exposing worker-management commands.
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
 - `results [directory] --photo <photo-id|base-name> --audit [--json]` shows one photo result with redacted request and raw model audit logs for decision tracing.
+- `groups <directory> --json` computes in-memory sequence groups for one indexed project.
+- `review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]` saves a group review snapshot. Without `--winner`, it uses the configured AI provider to compare the group and select a winner.
 - `mark <directory> <photo-id|base-name>` saves manual keep/maybe/reject/unreviewed decisions, stars, and notes without changing AI ratings.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
-- Rating work is invoked through `pick`, `scan`, `rate`, `coach`, or `arena`, not a user-facing `process` or `rate <db>` command.
+- Rating and review work is invoked through product commands such as `pick`, `scan`, `rate`, `coach`, `arena`, `groups`, and `review group`, not user-facing worker-management commands.
 
 ## Dependencies
 
@@ -40,4 +42,5 @@ The CLI depends on:
 - Do not reintroduce top-level `import`, `process`, `flush`, or `worker` commands. They are internal workflow concepts, not product CLI verbs.
 - Avoid provider-specific branches here when they can live in `PhotoSelector.Ai`.
 - Avoid platform-specific secret code here; use `PhotoSelector.Config`.
+- Do not expose SQLite database paths in normal user-facing commands. Use directories, project IDs for machine surfaces, or shared catalog context.
 - If `Program.cs` keeps growing, split command handlers or application services rather than adding more deep logic to one file.
