@@ -1,4 +1,5 @@
 using LinqToDB;
+using LinqToDB.Data;
 
 namespace PhotoSelector.Core.Storage;
 
@@ -19,6 +20,11 @@ public sealed partial class ProjectDatabase
         database.CreateTable<UserMarkRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<GroupReviewRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<GroupReviewItemRow>(tableOptions: TableOptions.CreateIfNotExists);
+        EnsureColumn("group_reviews", "request_json_redacted", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn("group_reviews", "raw_message_content", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn("group_reviews", "raw_response_json", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumn("group_reviews", "http_status", "INTEGER NULL");
+        EnsureColumn("group_reviews", "error", "TEXT NULL");
 
         if (!SchemaVersions.Any(row => row.Id == 1))
         {
@@ -48,5 +54,15 @@ public sealed partial class ProjectDatabase
         var schema = database.DataProvider.GetSchemaProvider().GetSchema(database);
         var table = schema.Tables.FirstOrDefault(item => item.TableName == tableName);
         return table?.Columns.Any(column => column.ColumnName == columnName) == true;
+    }
+
+    private void EnsureColumn(string tableName, string columnName, string definition)
+    {
+        if (TableHasColumn(tableName, columnName))
+        {
+            return;
+        }
+
+        database.Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}");
     }
 }

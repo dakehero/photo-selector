@@ -13,6 +13,11 @@ public sealed record GroupReview(
     string Provider,
     string Model,
     string Prompt,
+    string RequestJsonRedacted,
+    string RawMessageContent,
+    string RawResponseJson,
+    int? HttpStatus,
+    string? Error,
     DateTimeOffset CreatedAt);
 
 public sealed record GroupReviewItem(

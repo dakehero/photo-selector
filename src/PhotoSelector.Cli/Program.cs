@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using PhotoSelector.Agent.Workers;
 using PhotoSelector.Agent.Workflows;
 using PhotoSelector.Ai.Ratings;
+using PhotoSelector.Ai.Reviews;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
 using PhotoSelector.Core.Exporting;
@@ -37,7 +38,8 @@ public static partial class CliApp
         TextWriter error,
         TextReader input,
         ISecretStore? secretStore = null,
-        IPhotoRatingClient? ratingClient = null)
+        IPhotoRatingClient? ratingClient = null,
+        IGroupReviewClient? groupReviewClient = null)
     {
         if (args.Length == 0)
         {
@@ -48,7 +50,7 @@ public static partial class CliApp
 
         try
         {
-            var root = BuildCommandLine(output, error, input, secretStore, ratingClient);
+            var root = BuildCommandLine(output, error, input, secretStore, ratingClient, groupReviewClient);
             var parseResult = root.Parse(args);
             if (parseResult.Errors.Count > 0)
             {
@@ -78,7 +80,8 @@ public static partial class CliApp
         TextWriter error,
         TextReader input,
         ISecretStore secretStore,
-        IPhotoRatingClient? ratingClient)
+        IPhotoRatingClient? ratingClient,
+        IGroupReviewClient? groupReviewClient)
     {
         var root = new RootCommand("Photo Selector");
         root.Action = new RelayAction(_ => WriteUsage(error));
@@ -94,7 +97,7 @@ public static partial class CliApp
         root.Subcommands.Add(BuildResetCommand(output, error));
         root.Subcommands.Add(BuildResultsCommand(output, error));
         root.Subcommands.Add(BuildGroupsCommand(output, error));
-        root.Subcommands.Add(BuildReviewCommand(output, error));
+        root.Subcommands.Add(BuildReviewCommand(output, error, secretStore, groupReviewClient));
         root.Subcommands.Add(BuildMarkCommand(output, error));
         root.Subcommands.Add(BuildExportCommand(output, error));
         root.Subcommands.Add(BuildProjectsCommand(output, error));
@@ -1320,26 +1323,28 @@ public static partial class CliApp
         return 0;
     }
 
-    private static Command BuildReviewCommand(TextWriter output, TextWriter error)
+    private static Command BuildReviewCommand(
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IGroupReviewClient? groupReviewClient)
     {
         var command = new Command("review", "Review derived shoot structures such as sequence groups.");
-        command.Subcommands.Add(BuildReviewGroupCommand(output, error));
+        command.Subcommands.Add(BuildReviewGroupCommand(output, error, secretStore, groupReviewClient));
         return command;
     }
 
-    private static Command BuildReviewGroupCommand(TextWriter output, TextWriter error)
+    private static Command BuildReviewGroupCommand(
+        TextWriter output,
+        TextWriter error,
+        ISecretStore secretStore,
+        IGroupReviewClient? groupReviewClient)
     {
-        var command = new Command("group", "Save a manual review snapshot for one computed sequence group.");
+        var command = new Command("group", "Review and save a snapshot for one computed sequence group.");
         var directoryArgument = new Argument<string>("directory");
         var groupIdArgument = new Argument<string>("group-id");
-        var winnerOption = new Option<string>("--winner")
-        {
-            Required = true,
-        };
-        var reasonOption = new Option<string>("--reason")
-        {
-            Required = true,
-        };
+        var winnerOption = new Option<string?>("--winner");
+        var reasonOption = new Option<string?>("--reason");
         var jsonOption = new Option<bool>("--json");
         command.Arguments.Add(directoryArgument);
         command.Arguments.Add(groupIdArgument);
@@ -1350,22 +1355,26 @@ public static partial class CliApp
             RunReviewGroup(
                 parseResult.GetRequiredValue(directoryArgument),
                 parseResult.GetRequiredValue(groupIdArgument),
-                parseResult.GetRequiredValue(winnerOption),
-                parseResult.GetRequiredValue(reasonOption),
+                parseResult.GetValue(winnerOption),
+                parseResult.GetValue(reasonOption),
                 parseResult.GetValue(jsonOption),
                 output,
-                error));
+                error,
+                secretStore,
+                groupReviewClient));
         return command;
     }
 
     private static int RunReviewGroup(
         string directory,
         string groupId,
-        string winnerSelector,
-        string reason,
+        string? winnerSelector,
+        string? reason,
         bool json,
         TextWriter output,
-        TextWriter error)
+        TextWriter error,
+        ISecretStore secretStore,
+        IGroupReviewClient? groupReviewClient)
     {
         using var database = OpenCatalogDatabase();
         var project = FindProject(database, directory);
@@ -1385,13 +1394,6 @@ public static partial class CliApp
         if (group is null)
         {
             error.WriteLine($"Group not found: {groupId}");
-            return 1;
-        }
-
-        var winner = FindGroupWinner(group, photosById, winnerSelector);
-        if (winner is null)
-        {
-            error.WriteLine($"Winner photo not found in group: {winnerSelector}");
             return 1;
         }
 
@@ -1415,6 +1417,106 @@ public static partial class CliApp
                     item.SequenceNumber);
             })
             .ToArray();
+
+        PhotoItem? winner;
+        var reviewReason = reason;
+        var provider = "manual";
+        var model = "manual";
+        var prompt = string.Empty;
+        var requestJsonRedacted = string.Empty;
+        var rawMessageContent = string.Empty;
+        var rawResponseJson = string.Empty;
+        int? httpStatus = null;
+        string? reviewError = null;
+
+        if (string.IsNullOrWhiteSpace(winnerSelector))
+        {
+            if (!string.IsNullOrWhiteSpace(reason))
+            {
+                error.WriteLine("--reason can only be used with --winner.");
+                return 1;
+            }
+
+            var context = CreateGroupReviewContext(error, secretStore, groupReviewClient);
+            if (context is null)
+            {
+                return 1;
+            }
+
+            try
+            {
+                var requestItems = group.Items
+                    .OrderBy(item => item.Order)
+                    .Select(item =>
+                    {
+                        var photo = photosById[item.PhotoId];
+                        return new GroupReviewRequestItem(
+                            photo.Id,
+                            photo.BaseName,
+                            photo.JpegPath ?? string.Empty,
+                            item.Order,
+                            item.SequenceNumber);
+                    })
+                    .ToArray();
+                var missingImage = requestItems.FirstOrDefault(item => string.IsNullOrWhiteSpace(item.ImagePath));
+                if (missingImage is not null)
+                {
+                    error.WriteLine($"Group item has no JPEG image for AI review: {missingImage.BaseName}");
+                    return 1;
+                }
+
+                prompt = GroupReviewPrompt.Build(group.Id, group.Reason, requestItems);
+                var result = context.Client.ReviewGroupAsync(
+                    new GroupReviewRequest(
+                        context.BaseUrl,
+                        context.ApiKey.Secret!,
+                        context.Profile.Model,
+                        prompt,
+                        requestItems),
+                    CancellationToken.None).GetAwaiter().GetResult();
+                if (result.Review is null)
+                {
+                    error.WriteLine(result.Audit.Error ?? "AI group review failed.");
+                    return 1;
+                }
+
+                winner = FindGroupWinner(group, photosById, result.Review.WinnerBaseName);
+                if (winner is null)
+                {
+                    error.WriteLine($"AI selected a winner outside the group: {result.Review.WinnerBaseName}");
+                    return 1;
+                }
+
+                reviewReason = result.Review.Reason;
+                provider = context.Profile.Provider;
+                model = context.Profile.Model;
+                requestJsonRedacted = result.Audit.RequestJsonRedacted;
+                rawMessageContent = result.Audit.RawMessageContent;
+                rawResponseJson = result.Audit.RawResponseJson;
+                httpStatus = result.Audit.HttpStatus;
+                reviewError = result.Audit.Error;
+            }
+            finally
+            {
+                context?.OwnedClient?.Dispose();
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                error.WriteLine("--reason is required when --winner is provided.");
+                return 1;
+            }
+
+            winner = FindGroupWinner(group, photosById, winnerSelector);
+            if (winner is null)
+            {
+                error.WriteLine($"Winner photo not found in group: {winnerSelector}");
+                return 1;
+            }
+        }
+
         var reviewId = database.SaveGroupReview(
             project.Id,
             group.Id,
@@ -1423,11 +1525,16 @@ public static partial class CliApp
             group.Reason,
             winner.Id,
             winner.BaseName,
-            reason,
-            "manual",
-            "manual",
-            string.Empty,
-            snapshots);
+            reviewReason ?? string.Empty,
+            provider,
+            model,
+            prompt,
+            snapshots,
+            requestJsonRedacted,
+            rawMessageContent,
+            rawResponseJson,
+            httpStatus,
+            reviewError);
         var review = database.ListGroupReviews(project.Id).Single(item => item.Id == reviewId);
         var items = database.ListGroupReviewItems(reviewId);
 
@@ -2123,6 +2230,37 @@ public static partial class CliApp
         return new RatingContext(store, profile, apiKey, baseUrl, ratingClient ?? ownedClient!, ownedClient);
     }
 
+    private static GroupReviewContext? CreateGroupReviewContext(
+        TextWriter error,
+        ISecretStore secretStore,
+        IGroupReviewClient? groupReviewClient)
+    {
+        var store = new ConfigStore();
+        var config = store.Load();
+        var profile = config.GetOrCreateProfile(config.ActiveProfile);
+        var apiKey = ApiKeyResolver.Resolve(profile, secretStore);
+        if (!apiKey.IsAvailable || string.IsNullOrEmpty(apiKey.Secret))
+        {
+            error.WriteLine(apiKey.Error ?? "API key is unavailable.");
+            return null;
+        }
+
+        if (!ProviderGroupReviewClientFactory.IsSupported(profile.Provider))
+        {
+            error.WriteLine($"Unsupported provider: {profile.Provider}");
+            return null;
+        }
+
+        if (!Uri.TryCreate(profile.BaseUrl, UriKind.Absolute, out var baseUrl))
+        {
+            error.WriteLine($"Invalid base_url: {profile.BaseUrl}");
+            return null;
+        }
+
+        var ownedClient = groupReviewClient is null ? ProviderGroupReviewClientFactory.Create(profile.Provider) : null;
+        return new GroupReviewContext(store, profile, apiKey, baseUrl, groupReviewClient ?? ownedClient!, ownedClient);
+    }
+
     private static Command BuildAuthCommand(
         TextWriter output,
         TextWriter error,
@@ -2592,19 +2730,22 @@ public static partial class CliApp
             ["photo-selector groups \"C:\\Photos\\Shoot\" --json"]),
         new(
             "review group",
-            "photo-selector review group <directory> <group-id> --winner <photo-id|base-name> --reason <text> [--json]",
-            "Save a review snapshot for one computed sequence group.",
+            "photo-selector review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]",
+            "Review and save a snapshot for one computed sequence group.",
             [
                 new HelpArgumentJson("directory", true, "path", "directory", "Indexed project directory."),
                 new HelpArgumentJson("group-id", true, "string", "id", "Group id from photo-selector groups."),
             ],
             [
-                new HelpOptionJson("--winner", "string", true, [], "Winning photo id or base name within the group."),
-                new HelpOptionJson("--reason", "string", true, [], "Review note explaining the winner."),
+                new HelpOptionJson("--winner", "string", false, [], "Manual winning photo id or base name within the group. Omit to use AI group review."),
+                new HelpOptionJson("--reason", "string", false, [], "Manual review note explaining the winner."),
                 JsonOption,
             ],
             new HelpOutputJson(true, true, "Saved group review snapshot."),
-            ["photo-selector review group \"C:\\Photos\\Shoot\" filename-sequence:IMG_:0001-0002 --winner IMG_0002 --reason \"Sharper expression\" --json"]),
+            [
+                "photo-selector review group \"C:\\Photos\\Shoot\" filename-sequence:IMG_:0001-0002 --json",
+                "photo-selector review group \"C:\\Photos\\Shoot\" filename-sequence:IMG_:0001-0002 --winner IMG_0002 --reason \"Sharper expression\" --json",
+            ]),
         new(
             "mark",
             "photo-selector mark <directory> <photo-id|base-name> --decision <decision> [--stars <0-5>] [--note <text>] [--json]",
@@ -2979,6 +3120,14 @@ public static partial class CliApp
         Uri BaseUrl,
         IPhotoRatingClient Client,
         IPhotoRatingClient? OwnedClient);
+
+    private sealed record GroupReviewContext(
+        ConfigStore Store,
+        AiProfile Profile,
+        ApiKeyResolution ApiKey,
+        Uri BaseUrl,
+        IGroupReviewClient Client,
+        IGroupReviewClient? OwnedClient);
 
     private sealed record ProductCommandOptions(
         bool Json,

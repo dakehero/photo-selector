@@ -17,7 +17,12 @@ public sealed partial class ProjectDatabase
         string provider,
         string model,
         string prompt,
-        IEnumerable<GroupReviewItemSnapshot> items)
+        IEnumerable<GroupReviewItemSnapshot> items,
+        string requestJsonRedacted = "",
+        string rawMessageContent = "",
+        string rawResponseJson = "",
+        int? httpStatus = null,
+        string? error = null)
     {
         EnsureProjectExists(projectId);
         EnsurePhotoExists(winnerPhotoId);
@@ -36,6 +41,11 @@ public sealed partial class ProjectDatabase
             Provider = provider,
             Model = model,
             Prompt = prompt,
+            RequestJsonRedacted = requestJsonRedacted,
+            RawMessageContent = rawMessageContent,
+            RawResponseJson = rawResponseJson,
+            HttpStatus = httpStatus,
+            Error = error,
             CreatedAt = FormatTimestamp(DateTimeOffset.UtcNow),
         });
 
@@ -102,6 +112,11 @@ public sealed partial class ProjectDatabase
             row.Provider,
             row.Model,
             row.Prompt,
+            row.RequestJsonRedacted,
+            row.RawMessageContent,
+            row.RawResponseJson,
+            row.HttpStatus,
+            row.Error,
             ParseTimestamp(row.CreatedAt));
     }
 

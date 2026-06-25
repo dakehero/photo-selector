@@ -313,6 +313,21 @@ public sealed partial class ProjectDatabase
         [Column(Name = "prompt"), NotNull]
         public string Prompt { get; set; } = string.Empty;
 
+        [Column(Name = "request_json_redacted"), NotNull]
+        public string RequestJsonRedacted { get; set; } = string.Empty;
+
+        [Column(Name = "raw_message_content"), NotNull]
+        public string RawMessageContent { get; set; } = string.Empty;
+
+        [Column(Name = "raw_response_json"), NotNull]
+        public string RawResponseJson { get; set; } = string.Empty;
+
+        [Column(Name = "http_status"), Nullable]
+        public int? HttpStatus { get; set; }
+
+        [Column(Name = "error"), Nullable]
+        public string? Error { get; set; }
+
         [Column(Name = "created_at"), NotNull]
         public string CreatedAt { get; set; } = string.Empty;
     }

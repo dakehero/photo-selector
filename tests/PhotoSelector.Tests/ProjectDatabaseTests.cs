@@ -298,6 +298,60 @@ public sealed class ProjectDatabaseTests
         Assert.Equal(1, reader.GetInt64(4));
     }
 
+    [Fact]
+    public void Migrate_adds_group_review_audit_columns_to_existing_table()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE group_reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    project_id INTEGER NOT NULL,
+                    group_id TEXT NOT NULL,
+                    group_type TEXT NOT NULL,
+                    group_key TEXT NOT NULL,
+                    group_reason TEXT NOT NULL,
+                    winner_photo_id INTEGER NOT NULL,
+                    winner_base_name TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using (var database = ProjectDatabase.Open(databasePath))
+        {
+            database.Migrate();
+        }
+
+        using var migratedConnection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
+        migratedConnection.Open();
+        using var migratedCommand = migratedConnection.CreateCommand();
+        migratedCommand.CommandText = "PRAGMA table_info(group_reviews);";
+
+        using var reader = migratedCommand.ExecuteReader();
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        Assert.Contains("request_json_redacted", columns);
+        Assert.Contains("raw_message_content", columns);
+        Assert.Contains("raw_response_json", columns);
+        Assert.Contains("http_status", columns);
+        Assert.Contains("error", columns);
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

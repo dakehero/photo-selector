@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PhotoSelector.Ai.Ratings;
+using PhotoSelector.Ai.Reviews;
 using PhotoSelector.Cli;
 using PhotoSelector.Config;
 using PhotoSelector.Config.Secrets;
@@ -213,6 +214,63 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Review_group_json_uses_ai_when_winner_is_not_provided()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0002.JPG"), "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["config", "set", "provider", "openrouter"], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore));
+        Assert.Equal(0, CliApp.Run(["config", "set", "model", "test-group-review-model"], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore));
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new RecordingRatingClient()));
+
+        var reviewClient = new RecordingGroupReviewClient("IMG_0002");
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(
+            [
+                "review",
+                "group",
+                sourceDirectory,
+                "filename-sequence:IMG_:0001-0002",
+                "--json",
+            ],
+            output,
+            error,
+            TextReader.Null,
+            secretStore,
+            ratingClient: null,
+            groupReviewClient: reviewClient);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.NotNull(reviewClient.Request);
+        Assert.Equal("test-group-review-model", reviewClient.Request.Model);
+        Assert.Equal(["IMG_0001", "IMG_0002"], reviewClient.Request.Items.Select(item => item.BaseName).ToArray());
+        using var document = JsonDocument.Parse(output.ToString());
+        var reviewJson = document.RootElement.GetProperty("review");
+        Assert.Equal("IMG_0002", reviewJson.GetProperty("winnerBaseName").GetString());
+        Assert.Equal("Best expression and sharpest frame.", reviewJson.GetProperty("reason").GetString());
+
+        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        database.Migrate();
+        var project = Assert.Single(database.ListProjects());
+        var review = Assert.Single(database.ListGroupReviews(project.Id));
+        Assert.Equal("openrouter", review.Provider);
+        Assert.Equal("test-group-review-model", review.Model);
+        Assert.Equal("IMG_0002", review.WinnerBaseName);
+        Assert.Contains("[redacted-data-url]", review.RequestJsonRedacted);
+        Assert.DoesNotContain("data:image", review.RequestJsonRedacted);
+        Assert.Contains("winner_base_name", review.RawMessageContent);
+        Assert.Equal(200, review.HttpStatus);
+        Assert.Null(review.Error);
+    }
+
+    [Fact]
     public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();
@@ -302,6 +360,13 @@ public sealed class CliSmokeTests
         Assert.Equal("directory", pick.GetProperty("arguments")[0].GetProperty("kind").GetString());
         Assert.Contains(commands, command => command.GetProperty("name").GetString() == "projects list");
         Assert.Contains(commands, command => command.GetProperty("name").GetString() == "groups");
+        var reviewGroup = commands.Single(command => command.GetProperty("name").GetString() == "review group");
+        Assert.Equal(
+            "photo-selector review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]",
+            reviewGroup.GetProperty("usage").GetString());
+        var reviewGroupOptions = reviewGroup.GetProperty("options").EnumerateArray().ToArray();
+        Assert.False(reviewGroupOptions.Single(option => option.GetProperty("name").GetString() == "--winner").GetProperty("required").GetBoolean());
+        Assert.False(reviewGroupOptions.Single(option => option.GetProperty("name").GetString() == "--reason").GetProperty("required").GetBoolean());
         Assert.DoesNotContain(commands, command => command.GetProperty("name").GetString() == "process");
     }
 
@@ -387,6 +452,35 @@ public sealed class CliSmokeTests
                     """{"image_url":"[redacted-data-url]"}""",
                     """{"photo_type":"street","score":7.1}""",
                     """{"choices":[{"message":{"content":"{\"photo_type\":\"street\",\"score\":7.1}"}}]}""",
+                    200,
+                    null)));
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class RecordingGroupReviewClient(string winnerBaseName) : IGroupReviewClient
+    {
+        public GroupReviewRequest? Request { get; private set; }
+
+        public Task<GroupReviewClientResult> ReviewGroupAsync(GroupReviewRequest request, CancellationToken cancellationToken)
+        {
+            Request = request;
+            var review = new GroupReviewDecision(
+                winnerBaseName,
+                "Best expression and sharpest frame.",
+                [
+                    new GroupReviewItemDecision(winnerBaseName, "winner", "Best expression."),
+                ]);
+            return Task.FromResult(new GroupReviewClientResult(
+                review,
+                new AiRatingAudit(
+                    request.Prompt,
+                    """{"image_urls":["[redacted-data-url]"]}""",
+                    """{"winner_base_name":"IMG_0002","reason":"Best expression and sharpest frame."}""",
+                    """{"choices":[{"message":{"content":"{\"winner_base_name\":\"IMG_0002\",\"reason\":\"Best expression and sharpest frame.\"}"}}]}""",
                     200,
                     null)));
         }
