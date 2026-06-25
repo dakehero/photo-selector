@@ -1329,9 +1329,70 @@ public static partial class CliApp
         ISecretStore secretStore,
         IGroupReviewClient? groupReviewClient)
     {
-        var command = new Command("review", "Review derived shoot structures such as sequence groups.");
+        var command = new Command("review", "Review one shoot or derived shoot structures.");
+        var directoryArgument = new Argument<string>("directory")
+        {
+            Arity = ArgumentArity.ZeroOrOne,
+        };
+        var jsonOption = new Option<bool>("--json");
+        var saveOption = new Option<bool>("--save");
+        command.Arguments.Add(directoryArgument);
+        command.Options.Add(jsonOption);
+        command.Options.Add(saveOption);
+        command.SetAction(parseResult =>
+            RunReviewShoot(
+                parseResult.GetValue(directoryArgument),
+                parseResult.GetValue(jsonOption),
+                parseResult.GetValue(saveOption),
+                output,
+                error));
         command.Subcommands.Add(BuildReviewGroupCommand(output, error, secretStore, groupReviewClient));
         return command;
+    }
+
+    private static int RunReviewShoot(
+        string? directory,
+        bool json,
+        bool save,
+        TextWriter output,
+        TextWriter error)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return WriteUsage(error);
+        }
+
+        using var database = OpenCatalogDatabase();
+        var project = FindProject(database, directory);
+        if (project is null)
+        {
+            error.WriteLine($"Project not found: {directory}");
+            return 1;
+        }
+
+        var draft = new ShootReviewDraftBuilder().Build(database, project);
+        var reviewId = save ? SaveShootReviewDraft(database, draft) : (long?)null;
+        if (json)
+        {
+            output.WriteLine(JsonSerializer.Serialize(
+                new ShootReviewCommandJson(ToShootReviewJson(draft, reviewId)),
+                CliJsonContext.Default.ShootReviewCommandJson));
+            return 0;
+        }
+
+        if (reviewId is not null)
+        {
+            output.WriteLine($"Saved shoot review {reviewId.Value}.");
+        }
+
+        output.WriteLine(draft.SummaryText);
+        foreach (var candidate in draft.TopCandidates)
+        {
+            output.WriteLine(
+                $"{candidate.BaseName} {candidate.Score.ToString("0.0", CultureInfo.InvariantCulture)} {candidate.Category} - {candidate.Reason}");
+        }
+
+        return 0;
     }
 
     private static Command BuildReviewGroupCommand(
@@ -2522,6 +2583,64 @@ public static partial class CliApp
                 .ToArray());
     }
 
+    private static long SaveShootReviewDraft(ProjectDatabase database, ShootReviewDraft draft)
+    {
+        var json = ToShootReviewJson(draft, reviewId: null);
+        return database.SaveShootReview(
+            draft.ProjectId,
+            draft.SummaryText,
+            JsonSerializer.Serialize(json.Summary, CliJsonContext.Default.ShootReviewSummaryJson),
+            JsonSerializer.Serialize(json.TopCandidates, CliJsonContext.Default.ShootReviewCandidateJsonArray),
+            JsonSerializer.Serialize(json.GroupReviews, CliJsonContext.Default.ShootReviewGroupReviewJsonArray),
+            JsonSerializer.Serialize(json.WeakPatterns, CliJsonContext.Default.StringArray),
+            JsonSerializer.Serialize(json.NextShootNotes, CliJsonContext.Default.StringArray));
+    }
+
+    private static ShootReviewJson ToShootReviewJson(ShootReviewDraft draft, long? reviewId)
+    {
+        return new ShootReviewJson(
+            reviewId,
+            new ProjectScopeJson(draft.ProjectId, draft.SourceDirectory),
+            new ShootReviewSummaryJson(
+                draft.Summary.TotalPhotos,
+                draft.Summary.CurrentPhotos,
+                draft.Summary.MissingPhotos,
+                draft.Summary.RatedPhotos,
+                draft.Summary.Keep,
+                draft.Summary.Maybe,
+                draft.Summary.Reject,
+                draft.Summary.Groups,
+                draft.Summary.ReviewedGroups),
+            draft.SummaryText,
+            draft.Groups
+                .Select(group => new ShootReviewGroupJson(
+                    group.Id,
+                    group.Type,
+                    group.Key,
+                    group.Reason,
+                    group.Items.Select(item => new ShootReviewGroupItemJson(item.PhotoId, item.BaseName)).ToArray()))
+                .ToArray(),
+            draft.GroupReviews
+                .Select(review => new ShootReviewGroupReviewJson(
+                    review.GroupId,
+                    review.WinnerPhotoId,
+                    review.WinnerBaseName,
+                    review.Reason,
+                    review.Provider,
+                    review.Model))
+                .ToArray(),
+            draft.TopCandidates
+                .Select(candidate => new ShootReviewCandidateJson(
+                    candidate.PhotoId,
+                    candidate.BaseName,
+                    candidate.Score,
+                    candidate.Category,
+                    candidate.Reason))
+                .ToArray(),
+            draft.WeakPatterns.ToArray(),
+            draft.NextShootNotes.ToArray());
+    }
+
     private static JobSummaryJson ToJobSummaryJson(RatingJobSummary summary)
     {
         return new JobSummaryJson(summary.Total, summary.Pending, summary.Completed, summary.Failed);
@@ -2729,6 +2848,17 @@ public static partial class CliApp
             new HelpOutputJson(false, true, "Derived sequence groups."),
             ["photo-selector groups \"C:\\Photos\\Shoot\" --json"]),
         new(
+            "review",
+            "photo-selector review <directory> [--save] [--json]",
+            "Build a shoot review draft from catalog ratings and group review snapshots.",
+            [new HelpArgumentJson("directory", true, "path", "directory", "Indexed project directory.")],
+            [
+                new HelpOptionJson("--save", "boolean", false, [], "Persist the generated shoot review snapshot."),
+                JsonOption,
+            ],
+            new HelpOutputJson(true, true, "Shoot review draft with summary, groups, winners, and next-shoot notes."),
+            ["photo-selector review \"C:\\Photos\\Shoot\" --json", "photo-selector review \"C:\\Photos\\Shoot\" --save --json"]),
+        new(
             "review group",
             "photo-selector review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]",
             "Review and save a snapshot for one computed sequence group.",
@@ -2923,6 +3053,10 @@ public static partial class CliApp
     [JsonSerializable(typeof(ResultsJson))]
     [JsonSerializable(typeof(ResultsPhotoJson))]
     [JsonSerializable(typeof(GroupsJson))]
+    [JsonSerializable(typeof(ShootReviewCommandJson))]
+    [JsonSerializable(typeof(ShootReviewSummaryJson))]
+    [JsonSerializable(typeof(ShootReviewCandidateJson[]))]
+    [JsonSerializable(typeof(ShootReviewGroupReviewJson[]))]
     [JsonSerializable(typeof(ReviewGroupJson))]
     [JsonSerializable(typeof(MarkJson))]
     [JsonSerializable(typeof(StatusJson))]
@@ -2932,6 +3066,7 @@ public static partial class CliApp
     [JsonSerializable(typeof(HelpCatalogJson))]
     [JsonSerializable(typeof(HelpCommandJson))]
     [JsonSerializable(typeof(RatingCriterionJson[]))]
+    [JsonSerializable(typeof(string[]))]
     private sealed partial class CliJsonContext : JsonSerializerContext;
 
     private sealed record HelpCatalogJson(
@@ -3031,6 +3166,56 @@ public static partial class CliApp
         string BaseName,
         int Order,
         long SequenceNumber);
+
+    private sealed record ShootReviewCommandJson(ShootReviewJson Review);
+
+    private sealed record ShootReviewJson(
+        long? ReviewId,
+        ProjectScopeJson Project,
+        ShootReviewSummaryJson Summary,
+        string SummaryText,
+        ShootReviewGroupJson[] Groups,
+        ShootReviewGroupReviewJson[] GroupReviews,
+        ShootReviewCandidateJson[] TopCandidates,
+        string[] WeakPatterns,
+        string[] NextShootNotes);
+
+    private sealed record ShootReviewSummaryJson(
+        int TotalPhotos,
+        int CurrentPhotos,
+        int MissingPhotos,
+        int RatedPhotos,
+        int Keep,
+        int Maybe,
+        int Reject,
+        int Groups,
+        int ReviewedGroups);
+
+    private sealed record ShootReviewGroupJson(
+        string Id,
+        string Type,
+        string Key,
+        string Reason,
+        ShootReviewGroupItemJson[] Items);
+
+    private sealed record ShootReviewGroupItemJson(
+        long PhotoId,
+        string BaseName);
+
+    private sealed record ShootReviewGroupReviewJson(
+        string GroupId,
+        long WinnerPhotoId,
+        string WinnerBaseName,
+        string Reason,
+        string Provider,
+        string Model);
+
+    private sealed record ShootReviewCandidateJson(
+        long PhotoId,
+        string BaseName,
+        double Score,
+        string Category,
+        string Reason);
 
     private sealed record ReviewGroupJson(
         ProjectScopeJson Project,

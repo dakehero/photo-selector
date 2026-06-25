@@ -6,12 +6,13 @@
 
 ## Main Areas
 
-- `Workflows`: product workflow composition such as importing a directory and enqueueing rating work.
+- `Workflows`: product workflow composition such as importing a directory, enqueueing rating work, and building local shoot review drafts.
 - `Workers`: job processors that execute queued work and write results/audit logs.
 
 ## Important Files
 
 - `Workflows/ImportWorkflow.cs`: imports a directory into the catalog and enqueues rating jobs.
+- `Workflows/ShootReviewDraftBuilder.cs`: builds a local shoot review draft from catalog ratings, groups, and saved group review snapshots.
 - `Workers/RatingWorker.cs`: processes pending rating jobs with an `IPhotoRatingClient`.
 
 ## Dependencies

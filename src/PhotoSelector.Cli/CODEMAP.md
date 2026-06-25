@@ -19,11 +19,12 @@
 - `results [directory]` summarizes rating coverage, keep/maybe/reject counts, and top candidates.
 - `results [directory] --photo <photo-id|base-name> --audit [--json]` shows one photo result with redacted request and raw model audit logs for decision tracing.
 - `groups <directory> --json` computes in-memory sequence groups for one indexed project.
+- `review <directory> [--save] [--json]` builds a local shoot review draft from existing catalog ratings, groups, and saved group review snapshots. `--save` persists the generated snapshot for history/evaluation.
 - `review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]` saves a group review snapshot. Without `--winner`, it uses the configured AI provider to compare the group and select a winner.
 - `mark <directory> <photo-id|base-name>` saves manual keep/maybe/reject/unreviewed decisions, stars, and notes without changing AI ratings.
 - `export <keep|maybe|reject> <directory> <target>` copies matching JPG+RAW pairs from the shared default catalog.
 - `projects`, `open`, and `photos` read project context from the shared default catalog.
-- Rating and review work is invoked through product commands such as `pick`, `scan`, `rate`, `coach`, `arena`, `groups`, and `review group`, not user-facing worker-management commands.
+- Rating and review work is invoked through product commands such as `pick`, `scan`, `rate`, `coach`, `arena`, `groups`, `review`, and `review group`, not user-facing worker-management commands.
 
 ## Dependencies
 

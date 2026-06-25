@@ -11,7 +11,7 @@
 - `Metadata`: reads JPEG metadata such as EXIF capture time.
 - `Grouping`: computes derived in-memory groups from filename sequence, capture-time metadata, and future embedding stages.
 - `Projects`: immutable records used by storage, CLI, GUI, and agent-facing workflows.
-- `Storage`: SQLite project, photo lifecycle, rating, audit, rating-job, arena, user-mark, and group-review persistence. The default database path is selected by `PhotoSelector.Config`.
+- `Storage`: SQLite project, photo lifecycle, rating, audit, rating-job, arena, user-mark, group-review, and shoot-review persistence. The default database path is selected by `PhotoSelector.Config`.
 - `Exporting`: copies selected photo files into timestamped export folders.
 
 ## Important Files
@@ -25,13 +25,14 @@
 - `Storage/ProjectDatabase.cs`: database connection wrapper; domain-specific persistence lives in sibling partial files.
 - `Storage/ProjectDatabase.Schema.cs`: SQLite schema creation and migrations.
 - `Storage/ProjectDatabase.Rows.cs`: linq2db table row mappings.
-- `Storage/ProjectDatabase.*.cs`: partial persistence domains for projects, photos, ratings, audit logs, jobs, arena runs, user marks, and group reviews.
+- `Storage/ProjectDatabase.*.cs`: partial persistence domains for projects, photos, ratings, audit logs, jobs, arena runs, user marks, group reviews, and shoot reviews.
 - `Projects/PhotoItem.cs`: persisted photo row shape used by consumers.
 - `Projects/PhotoImportStatus.cs`: lifecycle states such as imported, changed, and missing.
 - `Projects/PhotoRating.cs`: parsed rating result attached to a photo.
 - `Projects/PhotoRatingAuditLog.cs`: raw and redacted AI decision trace.
 - `Projects/PhotoUserMark.cs`: manual decision, star rating, and note attached to one photo.
 - `Projects/GroupReview.cs`: persisted group review snapshot and audit data.
+- `Projects/ShootReview.cs`: persisted shoot review snapshot with summary and JSON result sections.
 - `Projects/RatingJob.cs`: durable queued rating work item.
 - `Projects/RatingJobSummary.cs`: pending/completed/failed job counts.
 - `Exporting/ExportService.cs`: export/copy behavior.

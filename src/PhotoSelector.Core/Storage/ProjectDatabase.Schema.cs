@@ -19,6 +19,7 @@ public sealed partial class ProjectDatabase
         database.CreateTable<ArenaRatingRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<UserMarkRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<GroupReviewRow>(tableOptions: TableOptions.CreateIfNotExists);
+        database.CreateTable<ShootReviewRow>(tableOptions: TableOptions.CreateIfNotExists);
         database.CreateTable<GroupReviewItemRow>(tableOptions: TableOptions.CreateIfNotExists);
         EnsureColumn("group_reviews", "request_json_redacted", "TEXT NOT NULL DEFAULT ''");
         EnsureColumn("group_reviews", "raw_message_content", "TEXT NOT NULL DEFAULT ''");

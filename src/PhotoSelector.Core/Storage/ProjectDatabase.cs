@@ -34,6 +34,8 @@ public sealed partial class ProjectDatabase : IDisposable
 
     private ITable<GroupReviewRow> GroupReviews => database.GetTable<GroupReviewRow>();
 
+    private ITable<ShootReviewRow> ShootReviews => database.GetTable<ShootReviewRow>();
+
     private ITable<GroupReviewItemRow> GroupReviewItems => database.GetTable<GroupReviewItemRow>();
 
     public static ProjectDatabase Open(string databasePath)

@@ -9,7 +9,7 @@
 - Core scanning, JPG+RAW pairing, metadata reading, grouping, storage, lifecycle state, ratings, audit logs, group reviews, and export behavior.
 - Config persistence, credential provider selection, and API key resolution behavior.
 - AI rating parsing, group review parsing, prompt/request payloads, provider factory behavior, and compatible-provider HTTP behavior.
-- CLI smoke tests, catalog command behavior, grouping/review command behavior, and rating command orchestration.
+- CLI smoke tests, catalog command behavior, shoot review draft behavior, grouping/review command behavior, and rating command orchestration.
 - Catalog-first CLI scan/open/list behavior.
 - Product CLI rating, status, reset, and removed-command behavior.
 
@@ -19,14 +19,14 @@
 - `PhotoMetadataReaderTests.cs`: metadata extraction behavior.
 - `FilenameSequenceGrouperTests.cs`: local grouping behavior.
 - `PhotoGroupingEncoderTests.cs`: embedding adapter placeholder behavior.
-- `ProjectDatabaseTests.cs`: SQLite project/photo lifecycle, rating, audit, group review, and migration persistence.
+- `ProjectDatabaseTests.cs`: SQLite project/photo lifecycle, rating, audit, group review, shoot review, and migration persistence.
 - `ExportServiceTests.cs`: selected photo export behavior.
 - `AiRatingParserTests.cs`: strict structured-rating parsing and parser/source-generation guardrails.
 - `OpenAiCompatibleRatingClientTests.cs`: HTTP request/response and audit capture.
 - `ProviderRatingClientFactoryTests.cs`: provider-name routing.
 - `CliConfigTests.cs`: CLI config behavior.
 - `CliRateTests.cs`: rating workflow orchestration and audit persistence.
-- `CliSmokeTests.cs`: catalog, groups, review group, help schema, and basic CLI command coverage.
+- `CliSmokeTests.cs`: catalog, groups, shoot review, review group, help schema, and basic CLI command coverage.
 - `SecretStoreFactoryTests.cs`: platform and memory secret-store selection.
 
 ## Boundaries

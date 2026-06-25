@@ -271,6 +271,111 @@ public sealed class CliSmokeTests
     }
 
     [Fact]
+    public void Review_json_outputs_shoot_review_draft_from_catalog_state()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0002.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0003.JPG"), "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new PerPhotoRatingClient()));
+        Assert.Equal(
+            0,
+            CliApp.Run(
+                [
+                    "review",
+                    "group",
+                    sourceDirectory,
+                    "filename-sequence:IMG_:0001-0003",
+                    "--winner",
+                    "IMG_0001",
+                    "--reason",
+                    "Strongest timing.",
+                ],
+                TextWriter.Null,
+                TextWriter.Null));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["review", sourceDirectory, "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var review = document.RootElement.GetProperty("review");
+        Assert.Equal(sourceDirectory, review.GetProperty("project").GetProperty("sourceDirectory").GetString());
+        var summary = review.GetProperty("summary");
+        Assert.Equal(3, summary.GetProperty("currentPhotos").GetInt32());
+        Assert.Equal(3, summary.GetProperty("ratedPhotos").GetInt32());
+        Assert.Equal(1, summary.GetProperty("keep").GetInt32());
+        Assert.Equal(1, summary.GetProperty("maybe").GetInt32());
+        Assert.Equal(1, summary.GetProperty("reject").GetInt32());
+        Assert.Equal(1, summary.GetProperty("groups").GetInt32());
+        Assert.Equal(1, summary.GetProperty("reviewedGroups").GetInt32());
+        var groupReview = Assert.Single(review.GetProperty("groupReviews").EnumerateArray());
+        Assert.Equal("filename-sequence:IMG_:0001-0003", groupReview.GetProperty("groupId").GetString());
+        Assert.Equal("IMG_0001", groupReview.GetProperty("winnerBaseName").GetString());
+        var topCandidate = Assert.Single(review.GetProperty("topCandidates").EnumerateArray());
+        Assert.Equal("IMG_0001", topCandidate.GetProperty("baseName").GetString());
+        Assert.Contains("IMG_0001", review.GetProperty("summaryText").GetString());
+        Assert.NotEmpty(review.GetProperty("nextShootNotes").EnumerateArray());
+    }
+
+    [Fact]
+    public void Review_save_json_persists_shoot_review_snapshot()
+    {
+        using var tempDirectory = new TempDirectory();
+        using var configEnv = new ScopedEnvironment(ConfigPaths.ConfigHomeEnvironmentVariable, tempDirectory.Path);
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0001.JPG"), "jpeg");
+        File.WriteAllText(Path.Combine(sourceDirectory, "IMG_0002.JPG"), "jpeg");
+
+        var secretStore = Login(new MemorySecretStore());
+        Assert.Equal(0, CliApp.Run(["scan", sourceDirectory], TextWriter.Null, TextWriter.Null, TextReader.Null, secretStore, new PerPhotoRatingClient()));
+        Assert.Equal(
+            0,
+            CliApp.Run(
+                [
+                    "review",
+                    "group",
+                    sourceDirectory,
+                    "filename-sequence:IMG_:0001-0002",
+                    "--winner",
+                    "IMG_0001",
+                    "--reason",
+                    "Best frame.",
+                ],
+                TextWriter.Null,
+                TextWriter.Null));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var exitCode = CliApp.Run(["review", sourceDirectory, "--save", "--json"], output, error);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        using var document = JsonDocument.Parse(output.ToString());
+        var review = document.RootElement.GetProperty("review");
+        var reviewId = review.GetProperty("reviewId").GetInt64();
+        Assert.True(reviewId > 0);
+
+        using var database = ProjectDatabase.Open(Path.Combine(tempDirectory.Path, "photo-selector.db"));
+        database.Migrate();
+        var saved = Assert.Single(database.ListShootReviews());
+        Assert.Equal(reviewId, saved.Id);
+        Assert.Contains("IMG_0001", saved.SummaryText);
+        Assert.Contains("\"keep\":", saved.SummaryJson);
+        Assert.Contains("IMG_0001", saved.TopCandidatesJson);
+        Assert.Contains("filename-sequence:IMG_:0001-0002", saved.GroupReviewsJson);
+        Assert.Contains("group-level", saved.NextShootNotesJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Scan_creates_shared_catalog_database_with_jpg_and_raw_files()
     {
         using var tempDirectory = new TempDirectory();
@@ -360,6 +465,11 @@ public sealed class CliSmokeTests
         Assert.Equal("directory", pick.GetProperty("arguments")[0].GetProperty("kind").GetString());
         Assert.Contains(commands, command => command.GetProperty("name").GetString() == "projects list");
         Assert.Contains(commands, command => command.GetProperty("name").GetString() == "groups");
+        var review = commands.Single(command => command.GetProperty("name").GetString() == "review");
+        Assert.Equal("photo-selector review <directory> [--save] [--json]", review.GetProperty("usage").GetString());
+        Assert.Contains(
+            review.GetProperty("options").EnumerateArray(),
+            option => option.GetProperty("name").GetString() == "--save" && !option.GetProperty("required").GetBoolean());
         var reviewGroup = commands.Single(command => command.GetProperty("name").GetString() == "review group");
         Assert.Equal(
             "photo-selector review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]",
@@ -481,6 +591,40 @@ public sealed class CliSmokeTests
                     """{"image_urls":["[redacted-data-url]"]}""",
                     """{"winner_base_name":"IMG_0002","reason":"Best expression and sharpest frame."}""",
                     """{"choices":[{"message":{"content":"{\"winner_base_name\":\"IMG_0002\",\"reason\":\"Best expression and sharpest frame.\"}"}}]}""",
+                    200,
+                    null)));
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class PerPhotoRatingClient : IPhotoRatingClient
+    {
+        public Task<AiRatingClientResult> RatePhotoAsync(PhotoRatingRequest request, CancellationToken cancellationToken)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(request.ImagePath);
+            var (score, category) = baseName switch
+            {
+                "IMG_0001" => (9.0, "keep"),
+                "IMG_0002" => (6.8, "maybe"),
+                "IMG_0003" => (3.2, "reject"),
+                _ => (5.0, "maybe"),
+            };
+            var rating = new AiRating(
+                "street",
+                score,
+                category,
+                [new AiRatingCriterion("impact", score, "Useful.")],
+                $"{baseName} rating.");
+            return Task.FromResult(new AiRatingClientResult(
+                rating,
+                new AiRatingAudit(
+                    request.Prompt,
+                    """{"image_url":"[redacted-data-url]"}""",
+                    $$"""{"photo_type":"street","score":{{score}},"category":"{{category}}"}""",
+                    """{"choices":[{"message":{"content":"{\"photo_type\":\"street\"}"}}]}""",
                     200,
                     null)));
         }

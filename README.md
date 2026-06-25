@@ -199,6 +199,8 @@ photo-selector export keep "$HOME/Photos/Shoot" "$HOME/Photos/Exports"
 - `results [directory]`: summarize ratings.
 - `results [directory] --photo <photo-id|base-name> --audit --json`: inspect one decision trace.
 - `groups <directory> --json`: compute in-memory sequence groups with filename and JPEG EXIF capture-time stages, with an AI encoder stage reserved for future visual similarity.
+- `review <directory> [--save] --json`: build a local shoot review draft from catalog ratings, groups, and saved group review snapshots, optionally saving it for history/evaluation.
+- `review group <directory> <group-id> [--winner <photo-id|base-name> --reason <text>] [--json]`: save a group review snapshot or ask the configured AI provider to select a group winner.
 - `mark <directory> <photo-id|base-name>`: save manual decisions and notes.
 - `export <keep|maybe|reject> <directory> <target>`: copy selected JPG+RAW pairs.
 - `help --json`: expose machine-readable CLI help.

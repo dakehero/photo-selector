@@ -210,6 +210,37 @@ public sealed class ProjectDatabaseTests
     }
 
     [Fact]
+    public void Shoot_review_snapshot_is_saved_and_listed()
+    {
+        using var tempDirectory = new TempDirectory();
+        var databasePath = Path.Combine(tempDirectory.Path, "project.db");
+        var sourceDirectory = Path.Combine(tempDirectory.Path, "shoot");
+
+        using var database = ProjectDatabase.Open(databasePath);
+        database.Migrate();
+        var projectId = database.CreateProject(sourceDirectory);
+
+        var reviewId = database.SaveShootReview(
+            projectId,
+            "Reviewed 2 current photo(s).",
+            """{"currentPhotos":2,"keep":1}""",
+            """[{"baseName":"IMG_0001"}]""",
+            """[{"groupId":"filename-sequence:IMG_:0001-0002"}]""",
+            """["soft focus"]""",
+            """["review similar frames"]""");
+
+        var review = Assert.Single(database.ListShootReviews(projectId));
+        Assert.Equal(reviewId, review.Id);
+        Assert.Equal(projectId, review.ProjectId);
+        Assert.Equal("Reviewed 2 current photo(s).", review.SummaryText);
+        Assert.Contains("currentPhotos", review.SummaryJson);
+        Assert.Contains("IMG_0001", review.TopCandidatesJson);
+        Assert.Contains("filename-sequence", review.GroupReviewsJson);
+        Assert.Contains("soft focus", review.WeakPatternsJson);
+        Assert.Contains("review similar frames", review.NextShootNotesJson);
+    }
+
+    [Fact]
     public void ResetRatings_preserves_audit_logs_with_cleared_rating_reference_by_default()
     {
         using var tempDirectory = new TempDirectory();

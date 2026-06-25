@@ -332,6 +332,37 @@ public sealed partial class ProjectDatabase
         public string CreatedAt { get; set; } = string.Empty;
     }
 
+    [Table(Name = "shoot_reviews")]
+    private sealed class ShootReviewRow
+    {
+        [Column(Name = "id"), PrimaryKey, Identity]
+        public long Id { get; set; }
+
+        [Column(Name = "project_id"), NotNull]
+        public long ProjectId { get; set; }
+
+        [Column(Name = "summary_text"), NotNull]
+        public string SummaryText { get; set; } = string.Empty;
+
+        [Column(Name = "summary_json"), NotNull]
+        public string SummaryJson { get; set; } = string.Empty;
+
+        [Column(Name = "top_candidates_json"), NotNull]
+        public string TopCandidatesJson { get; set; } = "[]";
+
+        [Column(Name = "group_reviews_json"), NotNull]
+        public string GroupReviewsJson { get; set; } = "[]";
+
+        [Column(Name = "weak_patterns_json"), NotNull]
+        public string WeakPatternsJson { get; set; } = "[]";
+
+        [Column(Name = "next_shoot_notes_json"), NotNull]
+        public string NextShootNotesJson { get; set; } = "[]";
+
+        [Column(Name = "created_at"), NotNull]
+        public string CreatedAt { get; set; } = string.Empty;
+    }
+
     [Table(Name = "group_review_items")]
     private sealed class GroupReviewItemRow
     {
