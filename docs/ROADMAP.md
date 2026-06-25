@@ -37,17 +37,19 @@ Quality bar:
 
 ## Phase 1: Local Similarity Grouping
 
+Status: first local slice implemented with derived in-memory groups. Durable group tables are intentionally deferred; saved group review snapshots preserve decisions that need history.
+
 Purpose: stop brute-forcing every photo through a large VLM. Build the local grouping layer that makes shoot review practical.
 
 Features:
 
-- Extract capture-time and filename sequence windows.
-- Read useful EXIF fields when available.
-- Compute perceptual hashes such as pHash/dHash/aHash.
-- Add simple color histogram features.
-- Form local sequence groups from time, filename, hash, and optional similarity thresholds.
-- Store group metadata and group-local ordering in the catalog.
-- Expose group data through CLI JSON for later UI and agent use.
+- Extract capture-time and filename sequence windows. (initial filename + JPEG EXIF slice implemented)
+- Read useful EXIF fields when available. (capture time implemented)
+- Compute perceptual hashes such as pHash/dHash/aHash. (deferred)
+- Add simple color histogram features. (deferred)
+- Form local sequence groups from time, filename, hash, and optional similarity thresholds. (initial filename/capture-time pipeline implemented)
+- Keep raw groups derived unless a product decision needs history; persist group review snapshots instead of generic group rows.
+- Expose group data through CLI JSON for later UI and agent use. (implemented)
 
 Later optional features:
 
@@ -63,20 +65,22 @@ Success criteria:
 
 ## Phase 2: Shoot Review Contract
 
+Status: in progress. Local shoot review drafts, saved shoot review snapshots, group review snapshots, and AI group comparison are implemented. VLM-generated shoot summaries and learning notes are not implemented yet.
+
 Purpose: define the product object above single-photo rating.
 
 Features:
 
-- `shoot review` data model with summary, strengths, weaknesses, winners, rejects, and next-shoot notes.
-- `group review` result with winner, alternates, reject reasons, and explanation.
-- Prompt contracts for group comparison and shoot review.
-- Audit records for group and shoot review calls.
+- `shoot review` data model with summary, strengths, weaknesses, winners, rejects, and next-shoot notes. (local draft + saved snapshot implemented)
+- `group review` result with winner, alternates, reject reasons, and explanation. (winner/reason snapshot implemented; richer item-level alternates/reject reasons deferred)
+- Prompt contracts for group comparison and shoot review. (group comparison implemented; shoot review prompt deferred)
+- Audit records for group and shoot review calls. (group AI audit implemented; saved local shoot review snapshots implemented)
 - CLI JSON surfaces for:
-  - project context
-  - groups
-  - group review
-  - shoot review draft
-  - learning notes
+  - project context (implemented)
+  - groups (implemented)
+  - group review (implemented)
+  - shoot review draft (implemented)
+  - learning notes (deferred)
 
 Success criteria:
 
@@ -199,4 +203,3 @@ These are valuable but should not lead the roadmap right now:
 - Full MCP server.
 
 Local models remain useful as provider/backend experiments, especially for embeddings, captions, summaries, or offline fallback. They should not displace the shoot-review, grouping, visual workbench, and eval loop.
-

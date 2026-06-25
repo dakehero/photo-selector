@@ -144,5 +144,5 @@ Worker implementation detail:
 
 ## Planning Rules
 
-- Do not create or maintain a root `TODO.md`. Track follow-up work in Superpowers specs and plans under `docs/superpowers/`.
+- Do not create or maintain a root `TODO.md`. For large design work, create focused Superpowers specs/plans under `docs/superpowers/` only while they are actively useful; once decisions are implemented or folded into `ROADMAP.md`, `AGENTS.md`, or `CODEMAP.md`, delete stale specs/plans instead of keeping a parallel harness.
 - Keep `CODEMAP.md` files as coarse navigation aids, not exhaustive inventories. Update them when adding or removing top-level areas, user-facing commands, storage domains, provider surfaces, or major test areas. If a codemap starts duplicating implementation details that change every slice, simplify it instead of expanding it.

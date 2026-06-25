@@ -157,7 +157,7 @@ Linux/macOS (Bash/Zsh):
 photo-selector pick "$HOME/Photos/Shoot" --concurrency 2
 ```
 
-The next product layer will focus on shoot review: grouping similar frames, recommending winners per group, and generating a session-level review. Current commands such as `pick`, `results`, `mark`, `arena`, and audit logs are the groundwork for that workflow.
+The current product layer is moving into shoot review: `groups` derives similar-frame clusters, `review group` records or asks AI for group winners, and `review <directory>` builds a session-level draft that can be saved for history/evaluation. Commands such as `pick`, `results`, `mark`, `arena`, and audit logs remain the groundwork for this workflow.
 
 Inspect results:
 
