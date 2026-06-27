@@ -43,76 +43,23 @@ If `dotnet` is missing, install the .NET 10 SDK. On Windows, you can use winget:
 winget install --id Microsoft.DotNet.SDK.10 -e
 ```
 
-## Run From Source
+## Quick Build And Publish
 
 From the repository root:
 
 ```pwsh
 dotnet restore
 dotnet build
-dotnet run --project src\PhotoSelector.Cli -- help
-```
-
-Everything after `dotnet run --project ... --` is passed to the Photo Selector CLI. For example:
-
-```pwsh
-dotnet run --project src\PhotoSelector.Cli -- help --json
-dotnet run --project src\PhotoSelector.Cli -- config list
-```
-
-Linux/macOS path style:
-
-```bash
-dotnet restore
-dotnet build
-dotnet run --project src/PhotoSelector.Cli -- help
-```
-
-## Build
-
-Development build:
-
-```pwsh
-dotnet build
-```
-
-Release build:
-
-```pwsh
-dotnet build --configuration Release
-```
-
-Build only the CLI project:
-
-```pwsh
-dotnet build src\PhotoSelector.Cli\PhotoSelector.Cli.csproj --configuration Release
-```
-
-The normal build output is usually under:
-
-```text
-src\PhotoSelector.Cli\bin\Release\net10.0\
-```
-
-Note: `dotnet build` creates a normal framework-dependent build that expects a compatible .NET runtime on the machine. To create a self-contained executable that is easier to distribute, use `dotnet publish`.
-
-## Test
-
-Run all tests:
-
-```pwsh
 dotnet test
 ```
 
-Run tests with the Release configuration, matching CI more closely:
+Run from source:
 
 ```pwsh
-dotnet test --configuration Release
+dotnet run --project src\PhotoSelector.Cli -- help
 ```
 
-## Publish Locally
-
-Publish a self-contained NativeAOT CLI for Windows ARM64:
+Publish a self-contained NativeAOT executable for Windows ARM64:
 
 ```pwsh
 dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj `
@@ -126,26 +73,10 @@ dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj `
   -o artifacts\photo-selector-win-arm64
 ```
 
-After publishing, the executable is here:
-
-```text
-artifacts\photo-selector-win-arm64\PhotoSelector.Cli.exe
-```
-
 Run it directly:
 
 ```pwsh
 .\artifacts\photo-selector-win-arm64\PhotoSelector.Cli.exe help
-```
-
-Rename it to the final CLI name:
-
-```pwsh
-Rename-Item `
-  -LiteralPath artifacts\photo-selector-win-arm64\PhotoSelector.Cli.exe `
-  -NewName photo-selector.exe
-
-.\artifacts\photo-selector-win-arm64\photo-selector.exe help
 ```
 
 Common runtime identifiers:
@@ -158,8 +89,6 @@ Common runtime identifiers:
 | Linux ARM64 | `linux-arm64` |
 | macOS Intel | `osx-x64` |
 | macOS Apple Silicon | `osx-arm64` |
-
-Change `--runtime win-arm64` to the target RID when publishing for another platform. Cross-platform NativeAOT publishing can require target-specific tooling, so the most reliable option is to publish on the target OS or use the GitHub Actions release workflow.
 
 ## GitHub Release Publishing
 
@@ -178,29 +107,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-To rebuild a release for an existing tag, open GitHub Actions, run the `Release` workflow manually, and provide the tag:
-
-```text
-v0.1.0
-```
-
-## Install A Local Publish
-
-Assuming you published to `artifacts\photo-selector-win-arm64`:
-
-```pwsh
-New-Item -ItemType Directory -Force "$HOME\bin" | Out-Null
-Copy-Item artifacts\photo-selector-win-arm64\photo-selector.exe "$HOME\bin\photo-selector.exe" -Force
-```
-
-If `$HOME\bin` is not on PATH yet, you can test it temporarily:
-
-```pwsh
-$env:PATH = "$HOME\bin;$env:PATH"
-photo-selector help
-```
-
-For permanent use, add `%USERPROFILE%\bin` to your user PATH in Windows environment variable settings.
+To rebuild a release for an existing tag, open GitHub Actions and run the `Release` workflow manually with that tag.
 
 ## Quick Start
 
@@ -276,52 +183,6 @@ API keys are not stored in config files, SQLite, tests, or audit logs. Prefer:
 - Environment variables for CI or temporary scripts
 
 RAW files are not uploaded to providers. Rating requests use generated JPG previews. Audit logs store redacted request metadata and raw model responses for traceability, debugging, and evaluation.
-
-## Troubleshooting
-
-### What is the shortest way to check that the project builds?
-
-```pwsh
-dotnet restore
-dotnet build
-dotnet test
-```
-
-### How do I create a Windows ARM64 executable?
-
-```pwsh
-dotnet publish src\PhotoSelector.Cli\PhotoSelector.Cli.csproj `
-  -c Release `
-  -r win-arm64 `
-  --self-contained true `
-  -p:PublishAot=true `
-  -p:StripSymbols=true `
-  -o artifacts\photo-selector-win-arm64
-
-.\artifacts\photo-selector-win-arm64\PhotoSelector.Cli.exe help
-```
-
-### What if `dotnet publish` fails?
-
-First check:
-
-```pwsh
-dotnet --info
-dotnet restore
-dotnet test --configuration Release
-```
-
-If normal tests pass but NativeAOT publish fails, the issue is often the target RID or local native toolchain. Start with the RID that matches the current machine: `win-arm64` for Windows ARM64, `win-x64` for Windows x64.
-
-### Where are release packages created?
-
-For local publishing, the output directory is controlled by `-o`, for example:
-
-```text
-artifacts\photo-selector-win-arm64\
-```
-
-The GitHub Actions release workflow uploads final zip/tar.gz packages to the GitHub Release page.
 
 ## License
 
